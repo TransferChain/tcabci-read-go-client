@@ -55,7 +55,6 @@ type client struct {
 	version             string
 	subscribed          bool
 	check               bool
-	retrieverTicker     *time.Ticker
 	listenCallback      func(transaction Transaction)
 	subscribedAddresses map[string]bool
 	listenCtx           context.Context
@@ -70,7 +69,6 @@ func NewClient(address string) Client {
 	c.version = "v0.1.0"
 	c.address = address
 	c.ctx = context.Background()
-	c.retrieverTicker = time.NewTicker(retryingInterval)
 	c.subscribedAddresses = make(map[string]bool)
 	c.subscribed = false
 	c.check = true
@@ -115,8 +113,7 @@ func (c *client) connect() (*websocket.Conn, error) {
 		case <-c.mainCtx.Done():
 			return nil, errors.New("main context canceled")
 		default:
-			c.conn, _, err = websocket.DefaultDialer.DialContext(c.mainCtx,
-				wsURL.String(),
+			c.conn, _, err = websocket.DefaultDialer.Dial(wsURL.String(),
 				headers)
 			if err != nil {
 				c.check = false
@@ -210,16 +207,10 @@ func (c *client) SetListenCallback(fn func(transaction Transaction)) {
 
 // Stop ws client and ws contexts
 func (c *client) Stop() {
-	c.retrieverTicker.Stop()
-
-	c.closeWS()
-
-	if c.conn != nil {
-		_ = c.conn.Close()
-	}
-	//
 	c.listenCtxCancel()
 	c.mainCtxCancel()
+	c.closeWS()
+	//
 	c.subscribed = false
 }
 
