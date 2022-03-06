@@ -259,10 +259,6 @@ func (c *client) Subscribe(addresses []string) error {
 }
 
 func (c *client) subscribe(already bool, addresses []string) error {
-	if c.subscribed {
-		return errors.New("client has been already subscribed")
-	}
-
 	tAddresses := make([]string, 0)
 	if already {
 		if len(c.subscribedAddresses) <= 0 {
