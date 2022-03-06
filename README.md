@@ -24,11 +24,7 @@ import (
 
 func main() {
 	var wsClient = tcabci_read_go_client.NewClient("wss://read-node-01.transferchain.io/ws")
-
-	if err := wsClient.Start(); err != nil {
-		log.Fatal(err)
-	}
-
+	
 	addresses := []string{
 		"<your-public-address-one>",
 		"<your-public-address-two>",
@@ -44,13 +40,7 @@ func main() {
 		// 
 		done <- struct{}{}
 	})
-
-	go func() {
-		if err := wsClient.Listen(); err != nil {
-			log.Fatal(err)
-		}
-	}()
-
+	
 	<-done
 	close(done)
 
@@ -59,6 +49,10 @@ func main() {
 }
 ```
 
+## Thanks
+
+Websocket client code referenced here [https://github.com/webdeveloppro/golang-websocket-client](https://github.com/webdeveloppro/golang-websocket-client).  
+  
 ## License
 
 tcabci-read-go-client is licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for the full license
