@@ -23,7 +23,7 @@ import (
 )
 
 func main() {
-	var wsClient = tcabci_read_go_client.NewClient("read-node-01.transferchain.io")
+	var wsClient = tcabci_read_go_client.NewClient("wss://read-node-01.transferchain.io/ws")
 
 	if err := wsClient.Start(); err != nil {
 		log.Fatal(err)

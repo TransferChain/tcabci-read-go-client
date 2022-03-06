@@ -89,23 +89,22 @@ func (c *client) retriever() {
 	for {
 		select {
 		case <-c.retrieverTicker.C:
-			c.makeConn()
+			_ = c.makeConn()
 		}
 	}
 }
 
-func (c *client) makeConn() {
+func (c *client) makeConn() error {
 	if c.started {
-		return
+		return errors.New("client already started")
 	}
 	var err error
 	headers := http.Header{}
 	headers.Set("X-Client", fmt.Sprintf("tcabaci-read-go-client%s", c.version))
 
-	wsURL := url.URL{
-		Scheme: "ws",
-		Host:   c.address,
-		Path:   "/ws",
+	wsURL, err := url.Parse(c.address)
+	if err != nil {
+		return err
 	}
 
 	c.conn, _, err = websocket.DefaultDialer.DialContext(c.ctx,
@@ -114,14 +113,14 @@ func (c *client) makeConn() {
 	if err != nil {
 		c.connected = false
 		log.Println("dial: ", err)
-		return
+		return err
 	}
 
 	if !c.connected && c.subscribed {
 		_ = c.unsubscribe(false)
 		if err := c.subscribe(true, nil); err != nil {
 			log.Println(fmt.Sprintf("client not subscribed. It will try again in %d seconds", retryingSecond))
-			return
+			return err
 		}
 	}
 
@@ -129,6 +128,8 @@ func (c *client) makeConn() {
 	_ = c.conn.SetReadDeadline(time.Now().Add(pongWait))
 	c.conn.SetPongHandler(func(string) error { _ = c.conn.SetReadDeadline(time.Now().Add(pongWait)); return nil })
 	c.connected = true
+
+	return nil
 }
 
 // SetListenCallback Callback that will be called when the WS client captures a
@@ -145,7 +146,9 @@ func (c *client) Start() error {
 	c.mainCtx, c.mainCtxCancel = context.WithCancel(c.ctx)
 	c.listenCtx, c.listenCtxCancel = context.WithCancel(c.mainCtx)
 
-	c.makeConn()
+	if err := c.makeConn(); err != nil {
+		return err
+	}
 	go c.retriever()
 
 	c.started = true
