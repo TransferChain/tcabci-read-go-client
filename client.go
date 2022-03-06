@@ -32,14 +32,10 @@ import (
 const (
 	retryingSecond   = 25
 	retryingInterval = time.Second * retryingSecond
-	writeWait        = 10 * time.Second
 	// Time allowed to read the next pong message from the peer.
 	pongWait = 10 * time.Second
 	// Send pings to peer with this period. Must be less than pongWait.
 	pingPeriod = (pongWait * 9) / 10
-	// Maximum message size allowed from peer.
-	maxMessageSize = 5 * 1024 * 1024
-	closedMessage  = "CLOSE"
 )
 
 // Client TCABCI Read Node Websocket Client
@@ -58,6 +54,7 @@ type client struct {
 	mainCtxCancel       context.CancelFunc
 	version             string
 	subscribed          bool
+	check               bool
 	retrieverTicker     *time.Ticker
 	listenCallback      func(transaction Transaction)
 	subscribedAddresses map[string]bool
@@ -76,6 +73,7 @@ func NewClient(address string) Client {
 	c.retrieverTicker = time.NewTicker(retryingInterval)
 	c.subscribedAddresses = make(map[string]bool)
 	c.subscribed = false
+	c.check = true
 	c.sendBuf = make(chan []byte)
 
 	c.start()
@@ -121,9 +119,18 @@ func (c *client) connect() (*websocket.Conn, error) {
 				wsURL.String(),
 				headers)
 			if err != nil {
-				log.Println("dial: ", err)
+				c.check = false
 				continue
 			}
+
+			if !c.check {
+				time.AfterFunc(time.Second*1, func() {
+					_ = c.unsubscribe(false)
+					_ = c.subscribe(true, nil)
+				})
+			}
+
+			c.check = true
 
 			return c.conn, nil
 		}
@@ -258,7 +265,10 @@ func (c *client) subscribe(already bool, addresses []string) error {
 
 	tAddresses := make([]string, 0)
 	if already {
-		for address, _ := range c.subscribedAddresses {
+		if len(c.subscribedAddresses) <= 0 {
+			return nil
+		}
+		for address := range c.subscribedAddresses {
 			tAddresses = append(tAddresses, address)
 		}
 	} else {
@@ -312,9 +322,13 @@ func (c *client) unsubscribe(_ bool) error {
 		return errors.New("client has not yet subscribed")
 	}
 
+	if len(c.subscribedAddresses) <= 0 {
+		return nil
+	}
+
 	addresses := make([]string, 0)
 
-	for address, _ := range c.subscribedAddresses {
+	for address := range c.subscribedAddresses {
 		addresses = append(addresses, address)
 	}
 
