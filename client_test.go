@@ -4,13 +4,11 @@ import (
 	"fmt"
 	"github.com/stretchr/testify/assert"
 	"testing"
+	"time"
 )
 
 func TestNewClient(t *testing.T) {
-	wsClient := NewClient("read-node-01.transferchain.io")
-
-	err := wsClient.Start()
-	assert.Nil(t, err)
+	wsClient := NewClient("wss://read-node-01.transferchain.io/ws")
 
 	done := make(chan struct{})
 	fn := func(transaction Transaction) {
@@ -20,17 +18,11 @@ func TestNewClient(t *testing.T) {
 	wsClient.SetListenCallback(fn)
 
 	addrs := []string{
-		"adr1",
-		"adr2",
+		"43fvvc8wnMES4L1Qy17tfo5Fzvbd4CFqjFEHD3UvQjtFdDeQuShjkWbQdN4f1bqCG7qXUvri7E8ZXodpRkX4wPqh",
 	}
-	err = wsClient.Subscribe(addrs)
+	time.Sleep(time.Second * 1)
+	err := wsClient.Subscribe(addrs)
 	assert.Nil(t, err)
-
-	go func() {
-		if err := wsClient.Listen(); err != nil {
-			panic(err)
-		}
-	}()
 
 	<-done
 	_ = wsClient.Unsubscribe()
