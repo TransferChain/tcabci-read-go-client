@@ -38,6 +38,14 @@ const (
 	pingPeriod = (pongWait * 9) / 10
 )
 
+type typ int
+
+const (
+	mclose  typ = 0
+	ping    typ = 1
+	message typ = 2
+)
+
 // Client TCABCI Read Node Websocket Client
 type Client interface {
 	Stop()
@@ -60,7 +68,13 @@ type client struct {
 	listenCtx           context.Context
 	listenCtxCancel     context.CancelFunc
 	mut                 sync.RWMutex
-	sendBuf             chan []byte
+	sendBuf             chan sendMsg
+}
+
+type sendMsg struct {
+	typ        typ
+	messageTyp int
+	msg        []byte
 }
 
 // NewClient make ws client
@@ -72,7 +86,7 @@ func NewClient(address string) Client {
 	c.subscribedAddresses = make(map[string]bool)
 	c.subscribed = false
 	c.check = true
-	c.sendBuf = make(chan []byte)
+	c.sendBuf = make(chan sendMsg)
 
 	c.start()
 
@@ -180,7 +194,11 @@ func (c *client) ping() {
 			if err != nil {
 				continue
 			}
-			if err := c.conn.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(pingPeriod/2)); err != nil {
+			if err := c.write(sendMsg{
+				typ:        ping,
+				messageTyp: websocket.PingMessage,
+				msg:        []byte{},
+			}); err != nil {
 				c.closeWS()
 			}
 		case <-c.mainCtx.Done():
@@ -192,7 +210,11 @@ func (c *client) ping() {
 func (c *client) closeWS() {
 	c.mut.Lock()
 	if c.conn != nil {
-		_ = c.conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+		_ = c.write(sendMsg{
+			typ:        mclose,
+			messageTyp: websocket.CloseMessage,
+			msg:        websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
+		})
 		_ = c.conn.Close()
 		c.conn = nil
 	}
@@ -214,13 +236,13 @@ func (c *client) Stop() {
 	c.subscribed = false
 }
 
-func (c *client) write(body []byte) error {
+func (c *client) write(sm sendMsg) error {
 	ctx, cancel := context.WithTimeout(c.mainCtx, time.Millisecond*15)
 	defer cancel()
 
 	for {
 		select {
-		case c.sendBuf <- body:
+		case c.sendBuf <- sm:
 			return nil
 		case <-ctx.Done():
 			return errors.New("context canceled")
@@ -229,14 +251,24 @@ func (c *client) write(body []byte) error {
 }
 
 func (c *client) listenWrite() {
-	for data := range c.sendBuf {
+	for buf := range c.sendBuf {
 		conn, err := c.connect()
 		if err != nil {
 			log.Println(fmt.Errorf("write conn is nil %v", err))
 			continue
 		}
-		if err := conn.WriteMessage(websocket.TextMessage,
-			data); err != nil {
+
+		switch buf.typ {
+		case ping:
+			err = c.conn.WriteControl(buf.messageTyp, buf.msg, time.Now().Add(pingPeriod/2))
+			break
+		case message, mclose:
+			err = conn.WriteMessage(buf.messageTyp, buf.msg)
+			break
+		default:
+			err = nil
+		}
+		if err != nil {
 			log.Println(fmt.Errorf("write message error %v", err))
 		} else {
 			//
@@ -277,6 +309,10 @@ func (c *client) subscribe(already bool, addresses []string) error {
 		}
 	}
 
+	if len(tAddresses) == 0 {
+		return nil
+	}
+
 	subscribeMessage := Message{
 		IsWeb: false,
 		Type:  Subscribe,
@@ -288,7 +324,11 @@ func (c *client) subscribe(already bool, addresses []string) error {
 		return err
 	}
 
-	c.sendBuf <- b
+	c.sendBuf <- sendMsg{
+		typ:        message,
+		messageTyp: websocket.TextMessage,
+		msg:        b,
+	}
 
 	for i := 0; i < len(tAddresses); i++ {
 		c.subscribedAddresses[tAddresses[i]] = true
@@ -329,7 +369,11 @@ func (c *client) unsubscribe(_ bool) error {
 		return err
 	}
 
-	c.sendBuf <- b
+	c.sendBuf <- sendMsg{
+		typ:        message,
+		messageTyp: websocket.TextMessage,
+		msg:        b,
+	}
 
 	c.subscribed = false
 
