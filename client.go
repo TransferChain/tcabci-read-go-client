@@ -260,7 +260,7 @@ func (c *client) listenWrite() {
 
 		switch buf.typ {
 		case ping:
-			err = c.conn.WriteControl(buf.messageTyp, buf.msg, time.Now().Add(pingPeriod/2))
+			err = conn.WriteControl(buf.messageTyp, buf.msg, time.Now().Add(pingPeriod/2))
 			break
 		case message, mclose:
 			err = conn.WriteMessage(buf.messageTyp, buf.msg)
