@@ -29,6 +29,10 @@ import (
 	"time"
 )
 
+// ErrNoConnected ...
+// Reference: https://github.com/recws-org/recws/blob/master/recws.go
+var ErrNoConnected = errors.New("websocket: not connected")
+
 const (
 	retryingSecond   = 25
 	retryingInterval = time.Second * retryingSecond
@@ -57,18 +61,23 @@ type Client interface {
 type client struct {
 	conn                *websocket.Conn
 	address             string
+	wsURL               *url.URL
+	wsHeaders           http.Header
 	ctx                 context.Context
 	mainCtx             context.Context
 	mainCtxCancel       context.CancelFunc
 	version             string
 	subscribed          bool
-	check               bool
+	connected           bool
+	handshakeTimeout    time.Duration
 	listenCallback      func(transaction Transaction)
 	subscribedAddresses map[string]bool
 	listenCtx           context.Context
 	listenCtxCancel     context.CancelFunc
 	mut                 sync.RWMutex
 	sendBuf             chan sendMsg
+	pingTicker          *time.Ticker
+	dialer              *websocket.Dialer
 }
 
 type sendMsg struct {
@@ -78,45 +87,112 @@ type sendMsg struct {
 }
 
 // NewClient make ws client
-func NewClient(address string) Client {
+func NewClient(address string) (Client, error) {
 	c := new(client)
 	c.version = "v0.1.0"
 	c.address = address
-	c.ctx = context.Background()
-	c.subscribedAddresses = make(map[string]bool)
-	c.subscribed = false
-	c.check = true
-	c.sendBuf = make(chan sendMsg)
-
-	c.start()
-
-	go c.listen()
-	go c.listenWrite()
-	go c.ping()
-
-	return c
-}
-
-// Start contexts and ws client and client retriever
-func (c *client) start() {
-	c.mainCtx, c.mainCtxCancel = context.WithCancel(c.ctx)
-	c.listenCtx, c.listenCtxCancel = context.WithCancel(c.mainCtx)
-}
-
-func (c *client) connect() (*websocket.Conn, error) {
-	c.mut.Lock()
-	defer c.mut.Unlock()
-	if c.conn != nil {
-		return c.conn, nil
-	}
-
-	var err error
-	headers := http.Header{}
-	headers.Set("Client", fmt.Sprintf("tcabaci-read-go-client%s", c.version))
 
 	wsURL, err := url.Parse(c.address)
 	if err != nil {
 		return nil, err
+	}
+
+	if wsURL.Scheme != "wss" && wsURL.Scheme != "ws" {
+		return nil, errors.New("invalid websocket url")
+	}
+	c.wsURL = wsURL
+
+	c.wsHeaders = http.Header{}
+	c.wsHeaders.Set("Client", fmt.Sprintf("tcabaci-read-go-client%s", c.version))
+
+	c.ctx = context.Background()
+	c.subscribedAddresses = make(map[string]bool)
+	c.subscribed = false
+	c.connected = false
+	c.handshakeTimeout = 3 * time.Second
+	c.dialer = &websocket.Dialer{
+		HandshakeTimeout: c.handshakeTimeout,
+		ReadBufferSize:   500 * 1024,
+		WriteBufferSize:  500 * 1024,
+		Jar:              nil,
+	}
+
+	c.start()
+
+	go func() {
+		_, _ = c.connect(false)
+	}()
+	time.AfterFunc(c.handshakeTimeout, func() {
+		go c.listen()
+		go c.listenWrite()
+		go c.ping()
+	})
+
+	return c, nil
+}
+
+func (c *client) setConnected(b bool) {
+	c.mut.Lock()
+	defer c.mut.Unlock()
+
+	c.connected = b
+}
+
+func (c *client) isConnected() bool {
+	c.mut.RLock()
+	defer c.mut.RUnlock()
+
+	return c.connected
+}
+
+func (c *client) setSubscribed(b bool) {
+	c.mut.Lock()
+	defer c.mut.Unlock()
+	c.subscribed = b
+}
+
+func (c *client) getSubscribed() bool {
+	c.mut.RLock()
+	defer c.mut.RUnlock()
+
+	return c.subscribed
+}
+
+func (c *client) getConn() *websocket.Conn {
+	c.mut.RLock()
+	defer c.mut.RUnlock()
+
+	return c.conn
+}
+
+func (c *client) getSubscribedAddress() map[string]bool {
+	c.mut.RLock()
+	defer c.mut.RUnlock()
+
+	return c.subscribedAddresses
+}
+
+func (c *client) setSubscribedAddress(v map[string]bool) {
+	c.mut.Lock()
+	defer c.mut.Unlock()
+
+	c.subscribedAddresses = v
+}
+
+// Start contexts and ws client and client retriever
+func (c *client) start() {
+	c.mut.Lock()
+	defer c.mut.Unlock()
+
+	c.mainCtx, c.mainCtxCancel = context.WithCancel(c.ctx)
+	c.listenCtx, c.listenCtxCancel = context.WithCancel(c.mainCtx)
+	c.sendBuf = make(chan sendMsg)
+	c.pingTicker = time.NewTicker(pingPeriod)
+}
+
+func (c *client) connect(reconnect bool) (*websocket.Conn, error) {
+	if c.getConn() != nil {
+		return c.getConn(), nil
 	}
 
 	ticker := time.NewTicker(time.Second)
@@ -127,113 +203,46 @@ func (c *client) connect() (*websocket.Conn, error) {
 		case <-c.mainCtx.Done():
 			return nil, errors.New("main context canceled")
 		default:
-			c.conn, _, err = websocket.DefaultDialer.Dial(wsURL.String(),
-				headers)
-			if err != nil {
-				c.check = false
-				continue
-			}
+			currentState := c.isConnected()
+			conn, _, err := c.dialer.Dial(c.wsURL.String(),
+				c.wsHeaders)
 
-			if !c.check {
-				time.AfterFunc(time.Second*1, func() {
+			c.mut.Lock()
+			c.conn = conn
+			c.connected = err == nil
+			c.mut.Unlock()
+
+			if err == nil {
+				if reconnect || (!currentState && c.getSubscribed()) {
 					_ = c.unsubscribe(false)
 					_ = c.subscribe(true, nil)
-				})
-			}
-
-			c.check = true
-
-			return c.conn, nil
-		}
-	}
-}
-
-func (c *client) listen() {
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-c.listenCtx.Done():
-			return
-		case <-ticker.C:
-			for {
-				conn, err := c.connect()
-				if err != nil {
-					return
 				}
-				messageType, readingMessage, err := conn.ReadMessage()
-				if err != nil {
-					c.closeWS()
-					break
-				}
-
-				switch messageType {
-				case websocket.TextMessage:
-					if json.Valid(readingMessage) {
-						var transaction Transaction
-						if err := json.Unmarshal(readingMessage, &transaction); err == nil {
-							c.listenCallback(transaction)
-						}
-					} else {
-						//
-						//fmt.Println("MSG: ", string(readingMessage))
-					}
-				}
-			}
-		}
-	}
-}
-
-func (c *client) ping() {
-	ticker := time.NewTicker(pingPeriod)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ticker.C:
-			_, err := c.connect()
-			if err != nil {
+			} else {
 				continue
 			}
-			if err := c.write(sendMsg{
-				typ:        ping,
-				messageTyp: websocket.PingMessage,
-				msg:        []byte{},
-			}); err != nil {
-				c.closeWS()
-			}
-		case <-c.mainCtx.Done():
-			return
+
+			return c.getConn(), nil
 		}
 	}
 }
 
-func (c *client) closeWS() {
-	c.mut.Lock()
-	if c.conn != nil {
-		_ = c.write(sendMsg{
-			typ:        mclose,
-			messageTyp: websocket.CloseMessage,
-			msg:        websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
-		})
-		_ = c.conn.Close()
-		c.conn = nil
+// readMessage ...
+// Reference: https://github.com/recws-org/recws/blob/master/recws.go
+func (c *client) readMessage() (messageType int, readingMessage []byte, err error) {
+	err = ErrNoConnected
+	if c.isConnected() {
+		messageType, readingMessage, err = c.conn.ReadMessage()
+		if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
+			c.closeWS()
+			return messageType, readingMessage, err
+		}
+		if err != nil {
+			c.closeWS()
+		} else {
+			//
+		}
 	}
-	c.mut.Unlock()
-}
-
-// SetListenCallback Callback that will be called when the WS client captures a
-// transaction event
-func (c *client) SetListenCallback(fn func(transaction Transaction)) {
-	c.listenCallback = fn
-}
-
-// Stop ws client and ws contexts
-func (c *client) Stop() {
-	c.listenCtxCancel()
-	c.mainCtxCancel()
-	c.closeWS()
-	//
-	c.subscribed = false
+	return
 }
 
 func (c *client) write(sm sendMsg) error {
@@ -252,28 +261,139 @@ func (c *client) write(sm sendMsg) error {
 
 func (c *client) listenWrite() {
 	for buf := range c.sendBuf {
-		conn, err := c.connect()
-		if err != nil {
-			log.Println(fmt.Errorf("write conn is nil %v", err))
+		if !c.isConnected() {
 			continue
 		}
-
+		c.mut.Lock()
+		var err error
 		switch buf.typ {
 		case ping:
-			err = conn.WriteControl(buf.messageTyp, buf.msg, time.Now().Add(pingPeriod/2))
+			err = c.conn.WriteControl(buf.messageTyp, buf.msg, time.Now().Add(pingPeriod/2))
 			break
 		case message, mclose:
-			err = conn.WriteMessage(buf.messageTyp, buf.msg)
+			err = c.conn.WriteMessage(buf.messageTyp, buf.msg)
 			break
 		default:
 			err = nil
 		}
+		c.mut.Unlock()
+		if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
+			c.Stop()
+			return
+		}
 		if err != nil {
 			log.Println(fmt.Errorf("write message error %v", err))
-		} else {
-			//
+			c.closeWS()
 		}
 	}
+}
+
+func (c *client) listen() {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-c.listenCtx.Done():
+			return
+		case <-ticker.C:
+			for {
+				if !c.isConnected() {
+					continue
+				}
+
+				messageType, readingMessage, err := c.readMessage()
+
+				if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
+					c.Stop()
+					return
+				}
+				if err != nil {
+					c.closeWS()
+					continue
+				}
+
+				switch messageType {
+				case websocket.TextMessage:
+					if json.Valid(readingMessage) {
+						var transaction Transaction
+						if err := json.Unmarshal(readingMessage, &transaction); err == nil {
+							c.listenCallback(transaction)
+						}
+					} else {
+						//
+						//
+					}
+				}
+			}
+		}
+	}
+}
+
+func (c *client) ping() {
+	defer c.pingTicker.Stop()
+	for {
+		select {
+		case <-c.pingTicker.C:
+
+			if !c.isConnected() {
+				_, err := c.connect(false)
+				if err != nil {
+					continue
+				}
+			} else {
+
+				if err := c.write(sendMsg{
+					typ:        ping,
+					messageTyp: websocket.PingMessage,
+					msg:        []byte{},
+				}); err != nil {
+
+					if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
+						c.Stop()
+						return
+					}
+					if err != nil {
+						c.closeWS()
+						continue
+					}
+				}
+
+			}
+		case <-c.mainCtx.Done():
+			return
+		}
+	}
+}
+
+func (c *client) closeWS() {
+	if c.getConn() != nil {
+		c.mut.Lock()
+		_ = c.write(sendMsg{
+			typ:        mclose,
+			messageTyp: websocket.CloseMessage,
+			msg:        websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
+		})
+		_ = c.conn.Close()
+		c.connected = false
+		c.conn = nil
+		c.mut.Unlock()
+	}
+}
+
+// SetListenCallback Callback that will be called when the WS client captures a
+// transaction event
+func (c *client) SetListenCallback(fn func(transaction Transaction)) {
+	c.listenCallback = fn
+}
+
+// Stop ws client and ws contexts
+func (c *client) Stop() {
+	c.listenCtxCancel()
+	c.mainCtxCancel()
+	c.pingTicker.Stop()
+	c.closeWS()
+	//
+	c.setSubscribed(false)
 }
 
 // Subscribe to given addresses
@@ -283,11 +403,12 @@ func (c *client) Subscribe(addresses []string) error {
 
 func (c *client) subscribe(already bool, addresses []string) error {
 	tAddresses := make([]string, 0)
+	subscribedAddress := c.getSubscribedAddress()
 	if already {
-		if len(c.subscribedAddresses) <= 0 {
+		if len(subscribedAddress) <= 0 {
 			return nil
 		}
-		for address := range c.subscribedAddresses {
+		for address := range subscribedAddress {
 			tAddresses = append(tAddresses, address)
 		}
 	} else {
@@ -297,10 +418,10 @@ func (c *client) subscribe(already bool, addresses []string) error {
 
 		tAddresses = addresses
 
-		if len(c.subscribedAddresses) > 0 {
+		if len(subscribedAddress) > 0 {
 			newAddress := make([]string, 0)
 			for i := 0; i < len(addresses); i++ {
-				if _, ok := c.subscribedAddresses[addresses[i]]; !ok {
+				if _, ok := subscribedAddress[addresses[i]]; !ok {
 					newAddress = append(newAddress, addresses[i])
 				}
 			}
@@ -330,11 +451,14 @@ func (c *client) subscribe(already bool, addresses []string) error {
 		msg:        b,
 	}
 
+	tmp := make(map[string]bool)
 	for i := 0; i < len(tAddresses); i++ {
-		c.subscribedAddresses[tAddresses[i]] = true
+		tmp[tAddresses[i]] = true
 	}
+	c.setSubscribedAddress(tmp)
+	tmp = nil
 
-	c.subscribed = true
+	c.setSubscribed(true)
 
 	return nil
 }
@@ -345,17 +469,18 @@ func (c *client) Unsubscribe() error {
 }
 
 func (c *client) unsubscribe(_ bool) error {
-	if !c.subscribed {
+	if !c.getSubscribed() {
 		return errors.New("client has not yet subscribed")
 	}
 
-	if len(c.subscribedAddresses) <= 0 {
+	subscribedAddress := c.getSubscribedAddress()
+	if len(subscribedAddress) <= 0 {
 		return nil
 	}
 
 	addresses := make([]string, 0)
 
-	for address := range c.subscribedAddresses {
+	for address := range subscribedAddress {
 		addresses = append(addresses, address)
 	}
 
@@ -375,7 +500,7 @@ func (c *client) unsubscribe(_ bool) error {
 		msg:        b,
 	}
 
-	c.subscribed = false
+	c.setSubscribed(false)
 
 	return nil
 }
