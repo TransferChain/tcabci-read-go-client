@@ -1,6 +1,6 @@
-// Package tcabci_read_go_client
+// package tcabcireadgoclient
 //
-// Copyright 2013-2018 TransferChain A.G
+// Copyright 2019 TransferChain A.G
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,26 +14,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tcabci_read_go_client
+package tcabcireadgoclient
 
 import "time"
 
+// Transaction read node transaction model
 type Transaction struct {
-	ID            uint64    `db:"id" json:"id"`
-	BlockID       uint64    `db:"block_id" json:"block_id"`
-	Height        uint64    `db:"height" json:"height"`
-	Identifier    string    `db:"identifier" json:"identifier"`
-	Version       uint      `db:"version" json:"version"`
-	Typ           string    `db:"typ" json:"typ"`
-	SenderAddr    string    `db:"sender_addr" json:"sender_addr"`
-	RecipientAddr string    `db:"recipient_addr" json:"recipient_addr"`
-	Data          Bytea     `db:"data" json:"data"`
-	Sign          Bytea     `db:"sign" json:"sign"`
-	Fee           uint64    `db:"fee" json:"fee"`
-	Hash          string    `db:"hash" json:"hash"`
-	InsertedAt    time.Time `db:"inserted_at" json:"inserted_at"`
+	ID            uint64    `json:"id"`
+	BlockID       uint64    `json:"block_id"`
+	Height        uint64    `json:"height"`
+	Identifier    string    `json:"identifier"`
+	Version       uint      `json:"version"`
+	Typ           string    `json:"typ"`
+	SenderAddr    string    `json:"sender_addr"`
+	RecipientAddr string    `json:"recipient_addr"`
+	Data          Bytea     `json:"data"`
+	Sign          Bytea     `json:"sign"`
+	Fee           uint64    `json:"fee"`
+	Hash          string    `json:"hash"`
+	InsertedAt    time.Time `json:"inserted_at"`
 }
 
+// Bytea transaction byte data
 type Bytea struct {
 	Bytes  []byte
 	Status int
