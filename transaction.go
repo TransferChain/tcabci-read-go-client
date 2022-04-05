@@ -1,4 +1,4 @@
-// Package tcabci_read_go_client
+// package tcabcireadgoclient
 //
 // Copyright 2019 TransferChain A.G
 //
@@ -14,10 +14,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tcabci_read_go_client
+package tcabcireadgoclient
 
 import "time"
 
+// Transaction read node transaction model
 type Transaction struct {
 	ID            uint64    `json:"id"`
 	BlockID       uint64    `json:"block_id"`
@@ -34,6 +35,7 @@ type Transaction struct {
 	InsertedAt    time.Time `json:"inserted_at"`
 }
 
+// Bytea transaction byte data
 type Bytea struct {
 	Bytes  []byte
 	Status int
