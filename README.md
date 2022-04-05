@@ -1,4 +1,5 @@
 # TCABCI Read Node Go WebSocket Client
+[![Go Report Card](https://goreportcard.com/badge/github.com/TransferChain/tcabci-read-go-client)](https://goreportcard.com/report/github.com/TransferChain/tcabci-read-go-client)
 
 TransferChain Fastest Read Network WebSocket Client  
 Read Node Address: [https://read-node-01.transferchain.io](https://read-node-01.transferchain.io)  
@@ -19,11 +20,11 @@ package main
 
 import (
 	"log"
-	"github.com/TransferChain/tcabci-read-go-client"
+	tcabcireadgoclient "github.com/TransferChain/tcabci-read-go-client"
 )
 
 func main() {
-	var wsClient = tcabci_read_go_client.NewClient("wss://read-node-01.transferchain.io/ws")
+	var wsClient = tcabcireadgoclient.NewClient("wss://read-node-01.transferchain.io/ws")
 	
 	addresses := []string{
 		"<your-public-address-one>",
@@ -36,7 +37,7 @@ func main() {
 
 	done := make(chan struct{})
 	// If a transaction has been sent to your addresses, the callback you set here will be called.
-	wsClient.SetListenCallback(func(transaction tcabci_read_go_client.Transaction) {
+	wsClient.SetListenCallback(func(transaction tcabcireadgoclient.Transaction) {
 		// 
 		done <- struct{}{}
 	})

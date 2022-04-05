@@ -1,6 +1,6 @@
-// Package tcabci_read_go_client
+// package tcabcireadgoclient
 //
-// Copyright 2013-2018 TransferChain A.G
+// Copyright 2019 TransferChain A.G
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tcabci_read_go_client
+package tcabcireadgoclient
 
 // MessageType ..
 type MessageType string

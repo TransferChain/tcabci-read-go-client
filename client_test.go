@@ -1,4 +1,4 @@
-package tcabci_read_go_client
+package tcabcireadgoclient
 
 import (
 	"fmt"
