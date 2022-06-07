@@ -32,6 +32,8 @@ import (
 // ErrNoConnected ...
 // Reference: https://github.com/recws-org/recws/blob/master/recws.go
 var ErrNoConnected = errors.New("websocket: not connected")
+var ErrAlreadyStarted = errors.New("already started")
+var ErrNotStarted = errors.New("not started yet")
 
 const (
 	retryingSecond   = 25
@@ -52,7 +54,8 @@ const (
 
 // Client TCABCI Read Node Websocket Client
 type Client interface {
-	Stop()
+	Start() error
+	Stop() error
 	SetListenCallback(func(transaction Transaction))
 	Subscribe(addresses []string) error
 	Unsubscribe() error
@@ -69,6 +72,7 @@ type client struct {
 	version             string
 	subscribed          bool
 	connected           bool
+	started             bool
 	handshakeTimeout    time.Duration
 	listenCallback      func(transaction Transaction)
 	subscribedAddresses map[string]bool
@@ -112,12 +116,12 @@ func NewClient(address string) (Client, error) {
 	c.handshakeTimeout = 3 * time.Second
 	c.dialer = &websocket.Dialer{
 		HandshakeTimeout: c.handshakeTimeout,
-		ReadBufferSize:   500 * 1024,
-		WriteBufferSize:  500 * 1024,
+		ReadBufferSize:   512 * 1024,
+		WriteBufferSize:  512 * 1024,
 		Jar:              nil,
 	}
 
-	c.start()
+	_ = c.Start()
 
 	go func() {
 		_, _ = c.connect(false)
@@ -131,11 +135,22 @@ func NewClient(address string) (Client, error) {
 	return c, nil
 }
 
+func (c *client) setStarted(b bool) {
+	c.mut.Lock()
+	c.started = b
+	c.mut.Unlock()
+}
+
+func (c *client) getStarted() bool {
+	c.mut.RLock()
+	defer c.mut.RUnlock()
+	return c.started
+}
+
 func (c *client) setConnected(b bool) {
 	c.mut.Lock()
-	defer c.mut.Unlock()
-
 	c.connected = b
+	c.mut.Unlock()
 }
 
 func (c *client) isConnected() bool {
@@ -147,8 +162,8 @@ func (c *client) isConnected() bool {
 
 func (c *client) setSubscribed(b bool) {
 	c.mut.Lock()
-	defer c.mut.Unlock()
 	c.subscribed = b
+	c.mut.Unlock()
 }
 
 func (c *client) getSubscribed() bool {
@@ -174,20 +189,42 @@ func (c *client) getSubscribedAddress() map[string]bool {
 
 func (c *client) setSubscribedAddress(v map[string]bool) {
 	c.mut.Lock()
-	defer c.mut.Unlock()
-
 	c.subscribedAddresses = v
+	c.mut.Unlock()
 }
 
 // Start contexts and ws client and client retriever
-func (c *client) start() {
+func (c *client) Start() error {
+	if c.getStarted() {
+		return ErrAlreadyStarted
+	}
 	c.mut.Lock()
-	defer c.mut.Unlock()
-
 	c.mainCtx, c.mainCtxCancel = context.WithCancel(c.ctx)
 	c.listenCtx, c.listenCtxCancel = context.WithCancel(c.mainCtx)
 	c.sendBuf = make(chan sendMsg)
 	c.pingTicker = time.NewTicker(pingPeriod)
+	c.mut.Unlock()
+	c.setStarted(true)
+
+	return nil
+}
+
+// Stop ws client and ws contexts
+func (c *client) Stop() error {
+	if !c.getStarted() {
+		return ErrNotStarted
+	}
+	c.listenCtxCancel()
+	c.mainCtxCancel()
+	if c.pingTicker != nil {
+		c.pingTicker.Stop()
+	}
+	c.closeWS()
+	//
+	c.setSubscribed(false)
+	c.setStarted(false)
+
+	return nil
 }
 
 func (c *client) connect(reconnect bool) (*websocket.Conn, error) {
@@ -278,7 +315,7 @@ func (c *client) listenWrite() {
 		}
 		c.mut.Unlock()
 		if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
-			c.Stop()
+			_ = c.Stop()
 			return
 		}
 		if err != nil {
@@ -302,9 +339,8 @@ func (c *client) listen() {
 				}
 
 				messageType, readingMessage, err := c.readMessage()
-
 				if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
-					c.Stop()
+					_ = c.Stop()
 					return
 				}
 				if err != nil {
@@ -334,7 +370,6 @@ func (c *client) ping() {
 	for {
 		select {
 		case <-c.pingTicker.C:
-
 			if !c.isConnected() {
 				_, err := c.connect(false)
 				if err != nil {
@@ -347,9 +382,8 @@ func (c *client) ping() {
 					messageTyp: websocket.PingMessage,
 					msg:        []byte{},
 				}); err != nil {
-
 					if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
-						c.Stop()
+						_ = c.Stop()
 						return
 					}
 					if err != nil {
@@ -367,7 +401,6 @@ func (c *client) ping() {
 
 func (c *client) closeWS() {
 	if c.getConn() != nil {
-		c.mut.Lock()
 		_ = c.write(sendMsg{
 			typ:        mclose,
 			messageTyp: websocket.CloseMessage,
@@ -376,7 +409,6 @@ func (c *client) closeWS() {
 		_ = c.conn.Close()
 		c.connected = false
 		c.conn = nil
-		c.mut.Unlock()
 	}
 }
 
@@ -384,16 +416,6 @@ func (c *client) closeWS() {
 // transaction event
 func (c *client) SetListenCallback(fn func(transaction Transaction)) {
 	c.listenCallback = fn
-}
-
-// Stop ws client and ws contexts
-func (c *client) Stop() {
-	c.listenCtxCancel()
-	c.mainCtxCancel()
-	c.pingTicker.Stop()
-	c.closeWS()
-	//
-	c.setSubscribed(false)
 }
 
 // Subscribe to given addresses
