@@ -315,9 +315,12 @@ func (c *client) listen() {
 		}
 
 		messageType, readingMessage, err := c.readMessage()
+		if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
+			return
+		}
 		if err != nil {
 			c.closeWS()
-			return
+			continue
 		}
 
 		if c.listenCallback != nil {
