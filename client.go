@@ -253,18 +253,13 @@ func (c *client) connect(reconnect bool) (*websocket.Conn, error) {
 // readMessage ...
 // Reference: https://github.com/recws-org/recws/blob/master/recws.go
 func (c *client) readMessage() (messageType int, readingMessage []byte, err error) {
-	err = ErrNoConnected
-	if c.isConnected() {
-		messageType, readingMessage, err = c.conn.ReadMessage()
-		if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
-			c.closeWS()
-			return messageType, readingMessage, err
-		}
-		if err != nil {
-			c.closeWS()
-		} else {
-			//
-		}
+	messageType, readingMessage, err = c.conn.ReadMessage()
+	if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
+		_ = c.Stop()
+		return messageType, readingMessage, err
+	}
+	if err != nil {
+		c.closeWS()
 	}
 	return
 }
@@ -313,40 +308,30 @@ func (c *client) listenWrite() {
 }
 
 func (c *client) listen() {
-	listening := true
-	for listening {
-		go func() {
-			select {
-			case <-c.listenCtx.Done():
-				listening = false
-				break
-			}
-		}()
+	for {
 		if !c.isConnected() {
 			time.Sleep(time.Second * 1)
 			continue
 		}
 
 		messageType, readingMessage, err := c.readMessage()
-		if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
-			_ = c.Stop()
-			return
-		}
 		if err != nil {
 			c.closeWS()
-			continue
+			return
 		}
 
-		switch messageType {
-		case websocket.TextMessage:
-			if json.Valid(readingMessage) {
-				var transaction Transaction
-				if err := json.Unmarshal(readingMessage, &transaction); err == nil {
-					c.listenCallback(transaction)
+		if c.listenCallback != nil {
+			switch messageType {
+			case websocket.TextMessage:
+				if json.Valid(readingMessage) {
+					var transaction Transaction
+					if err := json.Unmarshal(readingMessage, &transaction); err == nil {
+						c.listenCallback(transaction)
+					}
+				} else {
+					//
+					//
 				}
-			} else {
-				//
-				//
 			}
 		}
 	}
