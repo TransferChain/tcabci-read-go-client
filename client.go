@@ -82,6 +82,7 @@ type client struct {
 	sendBuf             chan sendMsg
 	pingTicker          *time.Ticker
 	dialer              *websocket.Dialer
+	receivedCh          chan Received
 }
 
 type sendMsg struct {
@@ -122,6 +123,7 @@ func NewClient(address string) (Client, error) {
 		Jar:              nil,
 	}
 
+	c.receivedCh = make(chan Received)
 	_ = c.Start()
 	//
 	go func() {
@@ -210,6 +212,7 @@ func (c *client) Stop() error {
 	//
 	c.setSubscribed(false)
 	c.setStarted(false)
+	c.setConnected(false)
 
 	return nil
 }
@@ -252,16 +255,28 @@ func (c *client) connect(reconnect bool) (*websocket.Conn, error) {
 
 // readMessage ...
 // Reference: https://github.com/recws-org/recws/blob/master/recws.go
-func (c *client) readMessage() (messageType int, readingMessage []byte, err error) {
-	messageType, readingMessage, err = c.conn.ReadMessage()
-	if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
-		_ = c.Stop()
-		return messageType, readingMessage, err
-	}
-	if err != nil {
-		c.closeWS()
-	}
-	return
+func (c *client) readMessage() <-chan Received {
+	go func() {
+		mt, rm, err := c.conn.ReadMessage()
+		if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
+			_ = c.Stop()
+			c.receivedCh <- Received{
+				MessageType:    mt,
+				ReadingMessage: rm,
+				Err:            err,
+			}
+			return
+		}
+		if err != nil {
+			c.closeWS()
+		}
+		c.receivedCh <- Received{
+			MessageType:    mt,
+			ReadingMessage: rm,
+			Err:            err,
+		}
+	}()
+	return c.receivedCh
 }
 
 func (c *client) write(sm sendMsg) error {
@@ -308,32 +323,38 @@ func (c *client) listenWrite() {
 }
 
 func (c *client) listen() {
-	for {
+	listening := true
+	for listening {
 		if !c.isConnected() {
 			time.Sleep(time.Second * 1)
 			continue
 		}
+		select {
+		case <-c.listenCtx.Done():
+			listening = false
+			break
+		case received := <-c.readMessage():
+			if websocket.IsCloseError(received.Err, websocket.CloseNormalClosure) {
+				listening = false
+				return
+			}
+			if received.Err != nil {
+				c.closeWS()
+				continue
+			}
 
-		messageType, readingMessage, err := c.readMessage()
-		if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
-			return
-		}
-		if err != nil {
-			c.closeWS()
-			continue
-		}
-
-		if c.listenCallback != nil {
-			switch messageType {
-			case websocket.TextMessage:
-				if json.Valid(readingMessage) {
-					var transaction Transaction
-					if err := json.Unmarshal(readingMessage, &transaction); err == nil {
-						c.listenCallback(transaction)
+			if c.listenCallback != nil {
+				switch received.MessageType {
+				case websocket.TextMessage:
+					if json.Valid(received.ReadingMessage) {
+						var transaction Transaction
+						if err := json.Unmarshal(received.ReadingMessage, &transaction); err == nil {
+							c.listenCallback(transaction)
+						}
+					} else {
+						//
+						//
 					}
-				} else {
-					//
-					//
 				}
 			}
 		}
