@@ -59,6 +59,7 @@ type Client interface {
 	SetListenCallback(func(transaction Transaction))
 	Subscribe(addresses []string) error
 	Unsubscribe() error
+	Write(b []byte) error
 }
 
 type client struct {
@@ -257,7 +258,7 @@ func (c *client) connect(reconnect bool) (*websocket.Conn, error) {
 // Reference: https://github.com/recws-org/recws/blob/master/recws.go
 func (c *client) readMessage() <-chan Received {
 	go func() {
-		mt, rm, err := c.conn.ReadMessage()
+		mt, rm, err := c.getConn().ReadMessage()
 		if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
 			_ = c.Stop()
 			c.receivedCh <- Received{
@@ -279,18 +280,29 @@ func (c *client) readMessage() <-chan Received {
 	return c.receivedCh
 }
 
-func (c *client) write(sm sendMsg) error {
-	ctx, cancel := context.WithTimeout(c.mainCtx, time.Millisecond*15)
-	defer cancel()
+func (c *client) Write(b []byte) error {
+	return c.write(sendMsg{
+		typ:        message,
+		messageTyp: websocket.TextMessage,
+		msg:        b,
+	})
+}
 
-	for {
+func (c *client) write(sm sendMsg) (err error) {
+	ctx, cancel := context.WithTimeout(c.mainCtx, time.Millisecond*15)
+	writing := false
+	for writing {
 		select {
 		case c.sendBuf <- sm:
-			return nil
+			err = nil
+			writing = false
 		case <-ctx.Done():
-			return errors.New("context canceled")
+			err = errors.New("context deadline exceeded")
+			writing = false
 		}
 	}
+	cancel()
+	return err
 }
 
 func (c *client) listenWrite() {
@@ -298,19 +310,25 @@ func (c *client) listenWrite() {
 		if !c.isConnected() {
 			continue
 		}
-		c.mut.Lock()
+		conn := c.getConn()
+		if conn == nil {
+			continue
+		}
 		var err error
 		switch buf.typ {
 		case ping:
-			err = c.conn.WriteControl(buf.messageTyp, buf.msg, time.Now().Add(pingPeriod/2))
+			c.mut.Lock()
+			err = conn.WriteControl(buf.messageTyp, buf.msg, time.Now().Add(pingPeriod/2))
+			c.mut.Unlock()
 			break
 		case message, mclose:
-			err = c.conn.WriteMessage(buf.messageTyp, buf.msg)
+			c.mut.Lock()
+			err = conn.WriteMessage(buf.messageTyp, buf.msg)
+			c.mut.Unlock()
 			break
 		default:
 			err = nil
 		}
-		c.mut.Unlock()
 		if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
 			_ = c.Stop()
 			return
@@ -362,8 +380,8 @@ func (c *client) listen() {
 }
 
 func (c *client) ping() {
-	defer c.pingTicker.Stop()
-	for {
+	writing := true
+	for writing {
 		select {
 		case <-c.pingTicker.C:
 			if !c.isConnected() {
@@ -372,7 +390,6 @@ func (c *client) ping() {
 					continue
 				}
 			} else {
-
 				if err := c.write(sendMsg{
 					typ:        ping,
 					messageTyp: websocket.PingMessage,
@@ -380,7 +397,8 @@ func (c *client) ping() {
 				}); err != nil {
 					if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
 						_ = c.Stop()
-						return
+						writing = false
+						break
 					}
 					if err != nil {
 						c.closeWS()
@@ -394,6 +412,7 @@ func (c *client) ping() {
 			return
 		}
 	}
+	c.pingTicker.Stop()
 }
 
 func (c *client) closeWS() {
