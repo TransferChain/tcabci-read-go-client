@@ -18,21 +18,116 @@ package tcabcireadgoclient
 
 import "time"
 
+type Type string
+
+func (t Type) IsValid() bool {
+	valid := false
+
+	for i := 0; i < len(TypesSlice); i++ {
+		if TypesSlice[i] == t {
+			valid = true
+			break
+		}
+	}
+
+	return valid
+}
+
+const (
+	TypeMaster                Type = "initial_storage"
+	TypeAddress               Type = "interim_storage"
+	TypeAddresses             Type = "interim_storages"
+	TypeSubMaster             Type = "initial_sub_storage"
+	TypeSubAddresses          Type = "interim_sub_storages"
+	TypeAccount               Type = "initial_account"
+	TypeMessage               Type = "message"
+	TypeMessageSent           Type = "inherit_message"
+	TypeMessageThreadDelete   Type = "inherit_message_recv"
+	TypeTransfer              Type = "transfer"
+	TypeTransferCancel        Type = "transfer_Cancel"
+	TypeTransferSent          Type = "transfer_sent"
+	TypeTransferReceiveDelete Type = "transfer_receive_delete"
+	TypeStorage               Type = "storage"
+	TypeStorageDelete         Type = "storage_delete"
+	TypeBackup                Type = "backup"
+	TypeContact               Type = "interim_message"
+	TypeFileVirtual           Type = "fs_virt"
+	TypeFileFs                Type = "fs_real"
+	TypeRfileVirtual          Type = "fs_rvirt"
+	TypeRfileFs               Type = "fs_rreal"
+	TypeDfileVirtual          Type = "fs_dvirt"
+	TypeDfileFs               Type = "fs_dreal"
+	TypeRequest               Type = "request"
+	TypeRequestIn             Type = "request_in"
+	TypeRequestUpload         Type = "request_upload"
+	TypeRequestCancel         Type = "request_Cancel"
+	TypeDataRoom              Type = "data_room"
+	TypeDataRoomPolicy        Type = "data_room_policy"
+	TypeDataRoomF             Type = "data_roomF"
+	TypeDataRoomData          Type = "data_room_data"
+	TypeDataRoomDataDelete    Type = "data_room_data_delete"
+	TypeDataRoomDataPolicy    Type = "data_room_data_policy"
+	TypeMultiStorage          Type = "multi_storage"
+	TypeMultiTransfer         Type = "multi_transfer"
+	TypeMultiTransferSent     Type = "multi_transfer_sent"
+	TypeMultiBackup           Type = "multi_backup"
+)
+
+var TypesSlice = []Type{
+	TypeMaster,
+	TypeAddress,
+	TypeAddresses,
+	TypeSubMaster,
+	TypeSubAddresses,
+	TypeAccount,
+	TypeMessage,
+	TypeMessageSent,
+	TypeMessageThreadDelete,
+	TypeTransfer,
+	TypeTransferCancel,
+	TypeTransferSent,
+	TypeTransferReceiveDelete,
+	TypeStorage,
+	TypeStorageDelete,
+	TypeBackup,
+	TypeContact,
+	TypeFileVirtual,
+	TypeFileFs,
+	TypeRfileVirtual,
+	TypeRfileFs,
+	TypeDfileVirtual,
+	TypeDfileFs,
+	TypeRequest,
+	TypeRequestIn,
+	TypeRequestUpload,
+	TypeRequestCancel,
+	TypeDataRoom,
+	TypeDataRoomPolicy,
+	TypeDataRoomF,
+	TypeDataRoomData,
+	TypeDataRoomDataDelete,
+	TypeDataRoomDataPolicy,
+	TypeMultiStorage,
+	TypeMultiTransfer,
+	TypeMultiTransferSent,
+	TypeMultiBackup,
+}
+
 // Transaction read node transaction model
 type Transaction struct {
-	ID            uint64    `json:"id"`
-	BlockID       uint64    `json:"block_id"`
-	Height        uint64    `json:"height"`
-	Identifier    string    `json:"identifier"`
-	Version       uint      `json:"version"`
-	Typ           string    `json:"typ"`
-	SenderAddr    string    `json:"sender_addr"`
-	RecipientAddr string    `json:"recipient_addr"`
-	Data          Bytea     `json:"data"`
-	Sign          Bytea     `json:"sign"`
-	Fee           uint64    `json:"fee"`
-	Hash          string    `json:"hash"`
-	InsertedAt    time.Time `json:"inserted_at"`
+	ID            interface{} `json:"id"`
+	BlockID       uint64      `json:"block_id"`
+	Height        uint64      `json:"height"`
+	Identifier    string      `json:"identifier"`
+	Version       uint        `json:"version"`
+	Typ           Type        `json:"typ"`
+	SenderAddr    string      `json:"sender_addr"`
+	RecipientAddr string      `json:"recipient_addr"`
+	Data          Bytea       `json:"data"`
+	Sign          Bytea       `json:"sign"`
+	Fee           uint64      `json:"fee"`
+	Hash          string      `json:"hash"`
+	InsertedAt    time.Time   `json:"inserted_at"`
 }
 
 // Bytea transaction byte data
