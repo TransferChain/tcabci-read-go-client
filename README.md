@@ -24,20 +24,24 @@ import (
 )
 
 func main() {
-	var wsClient = tcabcireadgoclient.NewClient("wss://read-node-01.transferchain.io/ws")
+	readNodeClient, _ := tcabcireadgoclient.NewClient("https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
+
+	if err := readNodeClient.Start(); err != nil {
+		log.Fatal(err)
+    }
 	
 	addresses := []string{
 		"<your-public-address-one>",
 		"<your-public-address-two>",
 	}
 
-	if err := wsClient.Subscribe(addresses); err != nil {
+	if err := readNodeClient.Subscribe(addresses); err != nil {
 		log.Fatal(err)
 	}
 
 	done := make(chan struct{})
 	// If a transaction has been sent to your addresses, the callback you set here will be called.
-	wsClient.SetListenCallback(func(transaction tcabcireadgoclient.Transaction) {
+	readNodeClient.SetListenCallback(func(transaction *tcabcireadgoclient.Transaction) {
 		// 
 		done <- struct{}{}
 	})
@@ -45,8 +49,8 @@ func main() {
 	<-done
 	close(done)
 
-	_ = wsClient.Unsubscribe()
-	wsClient.Stop()
+	_ = readNodeClient.Unsubscribe()
+	readNodeClient.Stop()
 }
 ```
 
