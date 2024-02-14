@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/fasthttp/websocket"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -56,16 +57,23 @@ const (
 type Client interface {
 	Start() error
 	Stop() error
-	SetListenCallback(func(transaction Transaction))
+	SetListenCallback(func(transaction *Transaction))
 	Subscribe(addresses []string) error
 	Unsubscribe() error
 	Write(b []byte) error
+	LastBlock() (*LastBlock, error)
+	TxSummary(summary *Summary) (lastBlockHeight uint64, lastTransaction *Transaction, totalCount uint64, err error)
+	TxSearch(search *Search) (txs []*Transaction, totalCount uint64, err error)
+	Broadcast(id string, version int, typ Type, data []byte, senderAddress, recipientAddress string, sign []byte, fee int) (*BroadcastResponse, error)
 }
 
 type client struct {
 	conn                *websocket.Conn
 	address             string
+	wsAddress           string
+	url                 *url.URL
 	wsURL               *url.URL
+	headers             http.Header
 	wsHeaders           http.Header
 	ctx                 context.Context
 	mainCtx             context.Context
@@ -75,7 +83,7 @@ type client struct {
 	connected           bool
 	started             bool
 	handshakeTimeout    time.Duration
-	listenCallback      func(transaction Transaction)
+	listenCallback      func(transaction *Transaction)
 	subscribedAddresses map[string]bool
 	listenCtx           context.Context
 	listenCtxCancel     context.CancelFunc
@@ -84,6 +92,7 @@ type client struct {
 	pingTicker          *time.Ticker
 	dialer              *websocket.Dialer
 	receivedCh          chan Received
+	httpClient          *http.Client
 }
 
 type sendMsg struct {
@@ -93,23 +102,37 @@ type sendMsg struct {
 }
 
 // NewClient make ws client
-func NewClient(address string) (Client, error) {
+func NewClient(address string, wsAddress string) (Client, error) {
 	c := new(client)
 	c.version = "v0.1.0"
 	c.address = address
+	c.wsAddress = wsAddress
 
-	wsURL, err := url.Parse(c.address)
+	var err error
+
+	c.url, err = url.Parse(c.address)
 	if err != nil {
 		return nil, err
 	}
 
-	if wsURL.Scheme != "wss" && wsURL.Scheme != "ws" {
-		return nil, errors.New("invalid websocket url")
+	if c.url.Scheme != "https" && c.url.Scheme != "http" {
+		return nil, errors.New("invalid address")
 	}
-	c.wsURL = wsURL
+
+	c.wsURL, err = url.Parse(c.wsAddress)
+	if err != nil {
+		return nil, err
+	}
+
+	if c.wsURL.Scheme != "wss" && c.wsURL.Scheme != "ws" {
+		return nil, errors.New("invalid websocket address")
+	}
+
+	c.headers = http.Header{}
+	c.headers.Set("Client", fmt.Sprintf("tcabaci-read-go-client-%s", c.version))
 
 	c.wsHeaders = http.Header{}
-	c.wsHeaders.Set("Client", fmt.Sprintf("tcabaci-read-go-client%s", c.version))
+	c.wsHeaders.Set("Client", fmt.Sprintf("tcabaci-read-go-client-%s", c.version))
 
 	c.ctx = context.Background()
 	c.subscribedAddresses = make(map[string]bool)
@@ -125,16 +148,8 @@ func NewClient(address string) (Client, error) {
 	}
 
 	c.receivedCh = make(chan Received)
-	_ = c.Start()
-	//
-	go func() {
-		_, _ = c.connect(false)
-	}()
-	time.AfterFunc(c.handshakeTimeout, func() {
-		go c.listen()
-		go c.listenWrite()
-		go c.ping()
-	})
+
+	c.httpClient = http.DefaultClient
 
 	return c, nil
 }
@@ -195,6 +210,16 @@ func (c *client) Start() error {
 	c.pingTicker = time.NewTicker(pingPeriod)
 	c.mut.Unlock()
 	c.setStarted(true)
+
+	//
+	go func() {
+		_, _ = c.connect(false)
+	}()
+	time.AfterFunc(c.handshakeTimeout, func() {
+		go c.listen()
+		go c.listenWrite()
+		go c.ping()
+	})
 
 	return nil
 }
@@ -367,7 +392,7 @@ func (c *client) listen() {
 					if json.Valid(received.ReadingMessage) {
 						var transaction Transaction
 						if err := json.Unmarshal(received.ReadingMessage, &transaction); err == nil {
-							c.listenCallback(transaction)
+							c.listenCallback(&transaction)
 						}
 					} else {
 						//
@@ -430,7 +455,7 @@ func (c *client) closeWS() {
 
 // SetListenCallback Callback that will be called when the WS client captures a
 // transaction event
-func (c *client) SetListenCallback(fn func(transaction Transaction)) {
+func (c *client) SetListenCallback(fn func(transaction *Transaction)) {
 	c.listenCallback = fn
 }
 
@@ -539,4 +564,184 @@ func (c *client) unsubscribe(_ bool) error {
 	c.setSubscribed(false)
 
 	return nil
+}
+
+// LastBlock fetch last block in blockchain network
+func (c *client) LastBlock() (*LastBlock, error) {
+	var lastBlock LastBlock
+
+	resp, err := c.httpClient.Get(c.address + "/v1/blocks?limit=1&offset=0")
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	_ = resp.Body.Close()
+
+	if err := json.Unmarshal(b, &lastBlock); err != nil {
+		return nil, err
+	}
+
+	return &lastBlock, nil
+}
+
+// TxSummary fetch summary with given parameters
+func (c *client) TxSummary(summary *Summary) (lastBlockHeight uint64, lastTransaction *Transaction, totalCount uint64, err error) {
+	if !summary.IsValid() {
+		err = errors.New("invalid parameters")
+		return 0, nil, 0, err
+	}
+
+	var req *http.Request
+
+	req, err = summary.ToRequest()
+	if err != nil {
+		return 0, nil, 0, err
+	}
+
+	req.URL, _ = url.Parse(c.address + summary.URI())
+
+	var summaryResponse SummaryResponse
+	var resp *http.Response
+
+	resp, err = c.httpClient.Do(req)
+	if err != nil {
+		return 0, nil, 0, err
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	if resp.StatusCode != 200 {
+		err = errors.New("transaction can not be broadcast")
+		return 0, nil, 0, err
+	}
+
+	var b []byte
+
+	b, err = io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, nil, 0, err
+	}
+
+	_ = resp.Body.Close()
+
+	if err = json.Unmarshal(b, &summaryResponse); err != nil {
+		return 0, nil, 0, err
+	}
+
+	return summaryResponse.Data.LastBlockHeight, summaryResponse.Data.LastTransaction, summaryResponse.TotalCount, nil
+}
+
+// TxSearch search with given parameters
+func (c *client) TxSearch(search *Search) (txs []*Transaction, totalCount uint64, err error) {
+	if !search.IsValid() {
+		err = errors.New("invalid parameters")
+		return nil, 0, err
+	}
+
+	var req *http.Request
+
+	req, err = search.ToRequest()
+	if err != nil {
+		return nil, 0, err
+	}
+
+	req.URL, _ = url.Parse(c.address + search.URI())
+
+	var searchResponse SearchResponse
+	var resp *http.Response
+
+	resp, err = c.httpClient.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	if resp.StatusCode != 200 {
+		err = errors.New("transaction can not be broadcast")
+		return nil, 0, err
+	}
+
+	var b []byte
+
+	b, err = io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	_ = resp.Body.Close()
+
+	if err = json.Unmarshal(b, &searchResponse); err != nil {
+		return nil, 0, err
+	}
+
+	return searchResponse.TXS, searchResponse.TotalCount, nil
+}
+
+// Broadcast ...
+func (c *client) Broadcast(id string, version int, typ Type, data []byte, senderAddress, recipientAddress string, sign []byte, fee int) (*BroadcastResponse, error) {
+	if !typ.IsValid() {
+		return nil, errors.New("invalid type")
+	}
+
+	broadcast := &Broadcast{
+		ID:      id,
+		Version: version,
+		Type:    typ,
+		Data:    data,
+		Sign:    sign,
+		Fee:     fee,
+	}
+
+	var err error
+	var req *http.Request
+
+	req, err = broadcast.ToRequest()
+	if err != nil {
+		return nil, err
+	}
+
+	req.URL, _ = url.Parse(c.address + broadcast.URI())
+
+	var resp *http.Response
+
+	resp, err = c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	if resp.StatusCode != 201 {
+		err = errors.New("transaction can not be broadcast")
+		return nil, err
+	}
+
+	var b []byte
+
+	b, err = io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	_ = resp.Body.Close()
+
+	var broadcastResponse BroadcastResponse
+
+	if err = json.Unmarshal(b, &broadcastResponse); err != nil {
+		return nil, err
+	}
+
+	return &broadcastResponse, nil
 }

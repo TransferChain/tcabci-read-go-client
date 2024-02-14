@@ -23,49 +23,49 @@ func randomString(n int) string {
 }
 
 func newClient(b *testing.B, n int) {
-	wsClient, err := NewClient("wss://read-node-01.transferchain.io/ws")
+	readNodeClient, err := NewClient("https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
 	assert.Nil(b, err)
 
 	//done := make(chan struct{})
-	fn := func(transaction Transaction) {
+	fn := func(transaction *Transaction) {
 		fmt.Println(transaction)
 		//done <- struct{}{}
 	}
-	wsClient.SetListenCallback(fn)
+	readNodeClient.SetListenCallback(fn)
 
 	addrs := make([]string, n)
 	for i := 0; i < n; i++ {
 		addrs = append(addrs, randomString(88))
 	}
 	time.Sleep(time.Second * 1)
-	err = wsClient.Subscribe(addrs)
+	err = readNodeClient.Subscribe(addrs)
 	assert.Nil(b, err)
 
 	//<-done
-	_ = wsClient.Unsubscribe()
-	err = wsClient.Stop()
+	_ = readNodeClient.Unsubscribe()
+	err = readNodeClient.Stop()
 	assert.Nil(b, err)
 }
 
 func newClientWithoutStop(t *testing.T) Client {
-	wsClient, err := NewClient("wss://read-node-01.transferchain.io/ws")
+	readNodeClient, err := NewClient("https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
 	assert.Nil(t, err)
 
 	//done := make(chan struct{})
-	fn := func(transaction Transaction) {
+	fn := func(transaction *Transaction) {
 		fmt.Println(transaction)
 		//done <- struct{}{}
 	}
-	wsClient.SetListenCallback(fn)
+	readNodeClient.SetListenCallback(fn)
 
 	addrs := make([]string, 251)
 	for i := 0; i < 251; i++ {
 		addrs = append(addrs, randomString(88))
 	}
-	err = wsClient.Subscribe(addrs)
+	err = readNodeClient.Subscribe(addrs)
 	assert.Nil(t, err)
 
-	return wsClient
+	return readNodeClient
 }
 
 func TestNewClientWW(t *testing.T) {
@@ -102,39 +102,39 @@ func TestNewClientWW(t *testing.T) {
 }
 
 func TestNewClient(t *testing.T) {
-	wsClient, err := NewClient("wss://read-node-01.transferchain.io/ws")
+	readNodeClient, err := NewClient("https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
 	assert.Nil(t, err)
 
 	//done := make(chan struct{})
-	fn := func(transaction Transaction) {
+	fn := func(transaction *Transaction) {
 		fmt.Println(transaction)
 		//done <- struct{}{}
 	}
-	wsClient.SetListenCallback(fn)
+	readNodeClient.SetListenCallback(fn)
 
 	addrs := []string{
 		randomString(88),
 	}
 	time.Sleep(time.Second * 1)
-	err = wsClient.Subscribe(addrs)
+	err = readNodeClient.Subscribe(addrs)
 	assert.Nil(t, err)
 
 	//<-done
-	_ = wsClient.Unsubscribe()
-	err = wsClient.Stop()
+	_ = readNodeClient.Unsubscribe()
+	err = readNodeClient.Stop()
 	assert.Nil(t, err)
 }
 
 func TestWriteParallel(t *testing.T) {
-	wsClient, err := NewClient("wss://read-node-01.transferchain.io/ws")
+	readNodeClient, err := NewClient("https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
 	assert.Nil(t, err)
 
 	//done := make(chan struct{})
-	fn := func(transaction Transaction) {
+	fn := func(transaction *Transaction) {
 		fmt.Println(transaction)
 		//done <- struct{}{}
 	}
-	wsClient.SetListenCallback(fn)
+	readNodeClient.SetListenCallback(fn)
 
 	adr1 := randomString(88)
 	adr2 := randomString(88)
@@ -143,14 +143,14 @@ func TestWriteParallel(t *testing.T) {
 		adr2,
 	}
 	time.Sleep(time.Second * 1)
-	err = wsClient.Subscribe(addrs)
+	err = readNodeClient.Subscribe(addrs)
 	assert.Nil(t, err)
 
 	lim := 100000
 	ch := make(chan bool)
 	for i := 0; i < lim; i++ {
 		go func(i int, ch chan bool) {
-			err := wsClient.Write([]byte(fmt.Sprintf("%d", i)))
+			err := readNodeClient.Write([]byte(fmt.Sprintf("%d", i)))
 			if err != nil {
 				fmt.Println(err)
 			}
@@ -161,15 +161,107 @@ func TestWriteParallel(t *testing.T) {
 		}(i, ch)
 	}
 	<-ch
-	_ = wsClient.Unsubscribe()
-	err = wsClient.Stop()
+	_ = readNodeClient.Unsubscribe()
+	err = readNodeClient.Stop()
 	assert.Nil(t, err)
 }
 
 func TestNewClientWithinvalidWSUrl(t *testing.T) {
-	wsClient, err := NewClient("https://read-node-01.transferchain.io/ws")
+	readNodeClient, err := NewClient("htt://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
 	assert.NotNil(t, err)
-	assert.Nil(t, wsClient)
+	assert.Nil(t, readNodeClient)
+}
+
+func TestLastBlock(t *testing.T) {
+	readNodeClient, err := NewClient("https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
+	assert.Nil(t, err)
+
+	lastBlock, err := readNodeClient.LastBlock()
+	assert.Nil(t, err)
+
+	assert.Less(t, uint64(1), lastBlock.TotalCount)
+	assert.Len(t, lastBlock.Blocks, 1)
+}
+
+func TestTxSummary(t *testing.T) {
+	readNodeClient, err := NewClient("https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
+	assert.Nil(t, err)
+
+	lastBlochHeight, lastTransaction, totalCount, err := readNodeClient.TxSummary(&Summary{
+		RecipientAddresses: []string{"2mSCzresfg8Gwu7LZ9k9BTWkQAcQEkvYHFUSCZE2ubM4QV89PTeSYwQDqBas3ykq2emHEK6VRvxdgoe1vrhBbQGN"},
+	})
+	assert.Nil(t, err)
+
+	assert.Less(t, uint64(1), lastBlochHeight)
+	assert.NotNil(t, lastTransaction)
+	assert.Less(t, uint64(1), totalCount)
+}
+
+func TestShouldErrorTxSummaryWithInvalidType(t *testing.T) {
+	readNodeClient, err := NewClient("https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
+	assert.Nil(t, err)
+
+	lastBlochHeight, lastTransaction, totalCount, err := readNodeClient.TxSummary(&Summary{
+		RecipientAddresses: []string{"2mSCzresfg8Gwu7LZ9k9BTWkQAcQEkvYHFUSCZE2ubM4QV89PTeSYwQDqBas3ykq2emHEK6VRvxdgoe1vrhBbQGN"},
+		Type:               "yp",
+	})
+	assert.NotNil(t, err)
+
+	assert.Equal(t, uint64(0), lastBlochHeight)
+	assert.Nil(t, lastTransaction)
+	assert.Equal(t, uint64(0), totalCount)
+}
+
+func TestTxSearch(t *testing.T) {
+	readNodeClient, err := NewClient("https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
+	assert.Nil(t, err)
+
+	txs, totalCount, err := readNodeClient.TxSearch(&Search{
+		HeightOperator:     ">=",
+		Height:             0,
+		RecipientAddresses: []string{"2mSCzresfg8Gwu7LZ9k9BTWkQAcQEkvYHFUSCZE2ubM4QV89PTeSYwQDqBas3ykq2emHEK6VRvxdgoe1vrhBbQGN"},
+		Limit:              1,
+		Offset:             0,
+		OrderBy:            "ASC",
+	})
+	assert.Nil(t, err)
+
+	assert.Less(t, 0, len(txs))
+	assert.Less(t, uint64(1), totalCount)
+}
+
+func TestShouldErrorTxSearchWithInvalidHeightOperator(t *testing.T) {
+	readNodeClient, err := NewClient("https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
+	assert.Nil(t, err)
+
+	txs, totalCount, err := readNodeClient.TxSearch(&Search{
+		HeightOperator:     "!=",
+		Height:             0,
+		RecipientAddresses: []string{"2mSCzresfg8Gwu7LZ9k9BTWkQAcQEkvYHFUSCZE2ubM4QV89PTeSYwQDqBas3ykq2emHEK6VRvxdgoe1vrhBbQGN"},
+		Limit:              1,
+		Offset:             0,
+		OrderBy:            "ASC",
+	})
+	assert.NotNil(t, err)
+
+	assert.Equal(t, 0, len(txs))
+	assert.Equal(t, uint64(0), totalCount)
+}
+
+func TestShouldErrorTxBroadcast(t *testing.T) {
+	readNodeClient, err := NewClient("https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
+	assert.Nil(t, err)
+
+	broadcast, err := readNodeClient.Broadcast("id",
+		0,
+		TypeTransfer,
+		[]byte("1"),
+		"address",
+		"address",
+		[]byte("1"),
+		0)
+	assert.NotNil(t, err)
+	assert.Nil(t, broadcast)
 }
 
 func BenchmarkNewClient(b *testing.B) {
