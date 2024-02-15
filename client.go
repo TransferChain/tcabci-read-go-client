@@ -64,7 +64,7 @@ type Client interface {
 	LastBlock() (*LastBlock, error)
 	TxSummary(summary *Summary) (lastBlockHeight uint64, lastTransaction *Transaction, totalCount uint64, err error)
 	TxSearch(search *Search) (txs []*Transaction, totalCount uint64, err error)
-	Broadcast(id string, version int, typ Type, data []byte, senderAddress, recipientAddress string, sign []byte, fee int) (*BroadcastResponse, error)
+	Broadcast(id string, version uint32, typ Type, data []byte, senderAddress, recipientAddress string, sign []byte, fee uint64) (*BroadcastResponse, error)
 }
 
 type client struct {
@@ -104,7 +104,7 @@ type sendMsg struct {
 // NewClient make ws client
 func NewClient(address string, wsAddress string) (Client, error) {
 	c := new(client)
-	c.version = "v1.2.0"
+	c.version = "v1.2.1"
 	c.address = address
 	c.wsAddress = wsAddress
 
@@ -689,18 +689,20 @@ func (c *client) TxSearch(search *Search) (txs []*Transaction, totalCount uint64
 }
 
 // Broadcast ...
-func (c *client) Broadcast(id string, version int, typ Type, data []byte, senderAddress, recipientAddress string, sign []byte, fee int) (*BroadcastResponse, error) {
+func (c *client) Broadcast(id string, version uint32, typ Type, data []byte, senderAddress, recipientAddress string, sign []byte, fee uint64) (*BroadcastResponse, error) {
 	if !typ.IsValid() {
 		return nil, errors.New("invalid type")
 	}
 
 	broadcast := &Broadcast{
-		ID:      id,
-		Version: version,
-		Type:    typ,
-		Data:    data,
-		Sign:    sign,
-		Fee:     fee,
+		ID:            id,
+		Version:       version,
+		Type:          typ,
+		SenderAddr:    senderAddress,
+		RecipientAddr: recipientAddress,
+		Data:          data,
+		Sign:          sign,
+		Fee:           fee,
 	}
 
 	var err error
