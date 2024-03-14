@@ -28,7 +28,8 @@ const (
 
 // Message ..
 type Message struct {
-	IsWeb bool        `json:"is_web"`
-	Type  MessageType `json:"type"`
-	Addrs []string    `json:"addrs"`
+	IsWeb   bool        `json:"is_web"`
+	Type    MessageType `json:"type"`
+	Addrs   []string    `json:"addrs"`
+	TXTypes []Type      `json:"tx_types"`
 }
