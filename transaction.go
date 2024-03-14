@@ -57,6 +57,7 @@ const (
 	TypeRfileFs               Type = "fs_rreal"
 	TypeDfileVirtual          Type = "fs_dvirt"
 	TypeDfileFs               Type = "fs_dreal"
+	TypePfileVirtual          Type = "fs_pvirt"
 	TypeRequest               Type = "request"
 	TypeRequestIn             Type = "request_in"
 	TypeRequestUpload         Type = "request_upload"
@@ -71,6 +72,7 @@ const (
 	TypeMultiTransfer         Type = "multi_transfer"
 	TypeMultiTransferSent     Type = "multi_transfer_sent"
 	TypeMultiBackup           Type = "multi_backup"
+	PasswdData                Type = "passwd_data"
 )
 
 var TypesSlice = []Type{
@@ -97,6 +99,7 @@ var TypesSlice = []Type{
 	TypeRfileFs,
 	TypeDfileVirtual,
 	TypeDfileFs,
+	TypePfileVirtual,
 	TypeRequest,
 	TypeRequestIn,
 	TypeRequestUpload,
@@ -111,6 +114,7 @@ var TypesSlice = []Type{
 	TypeMultiTransfer,
 	TypeMultiTransferSent,
 	TypeMultiBackup,
+	PasswdData,
 }
 
 // Transaction read node transaction model
