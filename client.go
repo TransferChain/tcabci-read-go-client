@@ -58,7 +58,7 @@ type Client interface {
 	Start() error
 	Stop() error
 	SetListenCallback(func(transaction *Transaction))
-	Subscribe(addresses []string) error
+	Subscribe(addresses []string, txTypes ...Type) error
 	Unsubscribe() error
 	Write(b []byte) error
 	LastBlock() (*LastBlock, error)
@@ -460,11 +460,15 @@ func (c *client) SetListenCallback(fn func(transaction *Transaction)) {
 }
 
 // Subscribe to given addresses
-func (c *client) Subscribe(addresses []string) error {
-	return c.subscribe(false, addresses)
+func (c *client) Subscribe(addresses []string, txTypes ...Type) error {
+	return c.subscribe(false, addresses, txTypes...)
 }
 
-func (c *client) subscribe(already bool, addresses []string) error {
+func (c *client) subscribe(already bool, addresses []string, txTypes ...Type) error {
+	if len(txTypes) > len(TypesSlice) {
+		return errors.New("invalid tx types")
+	}
+
 	tAddresses := make([]string, 0)
 	subscribedAddress := c.getSubscribedAddress()
 	if already {
@@ -498,9 +502,10 @@ func (c *client) subscribe(already bool, addresses []string) error {
 	}
 
 	subscribeMessage := Message{
-		IsWeb: false,
-		Type:  Subscribe,
-		Addrs: tAddresses,
+		IsWeb:   false,
+		Type:    Subscribe,
+		Addrs:   tAddresses,
+		TXTypes: txTypes,
 	}
 
 	b, err := json.Marshal(subscribeMessage)
