@@ -72,7 +72,12 @@ const (
 	TypeMultiTransfer         Type = "multi_transfer"
 	TypeMultiTransferSent     Type = "multi_transfer_sent"
 	TypeMultiBackup           Type = "multi_backup"
-	PasswdData                Type = "passwd_data"
+	TypePasswdData            Type = "passwd_data"
+	TypePasswdRoomPolicy      Type = "passwd_room_policy"
+	TypePasswdRoomF           Type = "passwd_roomF"
+	TypePasswdRoomData        Type = "passwd_room_data"
+	TypePasswdRoomDataDelete  Type = "passwd_room_data_delete"
+	TypePasswdRoomDataPolicy  Type = "passwd_room_data_policy"
 )
 
 var TypesSlice = []Type{
@@ -114,7 +119,12 @@ var TypesSlice = []Type{
 	TypeMultiTransfer,
 	TypeMultiTransferSent,
 	TypeMultiBackup,
-	PasswdData,
+	TypePasswdData,
+	TypePasswdRoomPolicy,
+	TypePasswdRoomF,
+	TypePasswdRoomData,
+	TypePasswdRoomDataDelete,
+	TypePasswdRoomDataPolicy,
 }
 
 // Transaction read node transaction model
