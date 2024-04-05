@@ -73,6 +73,7 @@ const (
 	TypeMultiTransferSent     Type = "multi_transfer_sent"
 	TypeMultiBackup           Type = "multi_backup"
 	TypePasswdData            Type = "passwd_data"
+	TypePasswdRoom            Type = "passwd_room"
 	TypePasswdRoomPolicy      Type = "passwd_room_policy"
 	TypePasswdRoomF           Type = "passwd_roomF"
 	TypePasswdRoomData        Type = "passwd_room_data"
@@ -120,6 +121,7 @@ var TypesSlice = []Type{
 	TypeMultiTransferSent,
 	TypeMultiBackup,
 	TypePasswdData,
+	TypePasswdRoom,
 	TypePasswdRoomPolicy,
 	TypePasswdRoomF,
 	TypePasswdRoomData,
