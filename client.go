@@ -104,7 +104,7 @@ type sendMsg struct {
 // NewClient make ws client
 func NewClient(address string, wsAddress string) (Client, error) {
 	c := new(client)
-	c.version = "v1.2.6"
+	c.version = "v1.2.7"
 	c.address = address
 	c.wsAddress = wsAddress
 
@@ -672,12 +672,21 @@ func (c *client) TxSearch(search *Search) (txs []*Transaction, totalCount uint64
 		_ = resp.Body.Close()
 	}()
 
-	if resp.StatusCode != 200 {
-		err = errors.New("transaction can not be broadcast")
-		return nil, 0, err
-	}
-
 	var b []byte
+
+	if resp.StatusCode != 200 {
+		b, err = io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, 0, err
+		}
+
+		var errorResponse Response
+		if err = json.Unmarshal(b, &errorResponse); err != nil {
+			return nil, 0, err
+		}
+
+		return nil, 0, errors.New(errorResponse.Detail)
+	}
 
 	b, err = io.ReadAll(resp.Body)
 	if err != nil {
