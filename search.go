@@ -55,7 +55,7 @@ const (
 type Search struct {
 	HeightOperator     HeightOperator `json:"-"`
 	Height             uint64         `json:"-"`
-	height             string         `json:"height,omitempty"`
+	PHeight            string         `json:"height,omitempty"`
 	RecipientAddresses []string       `json:"recipient_addrs,omitempty"`
 	SenderAddresses    []string       `json:"sender_addrs,omitempty"`
 	Hashes             []string       `json:"hashes,omitempty"`
@@ -107,9 +107,18 @@ func (s *Search) IsValid() bool {
 }
 
 func (s *Search) ToJSON() ([]byte, error) {
-	s.height = fmt.Sprintf("%s %d", s.HeightOperator, s.Height)
+	s.PHeight = fmt.Sprintf("%s %d", s.HeightOperator, s.Height)
 
-	return json.Marshal(s)
+	buf := bytes.NewBuffer([]byte{})
+	enc := json.NewEncoder(buf)
+
+	enc.SetEscapeHTML(false)
+
+	if err := enc.Encode(s); err != nil {
+		return nil, err
+	}
+
+	return buf.Bytes(), nil
 }
 
 func (s *Search) ToRequest() (*http.Request, error) {
@@ -124,4 +133,12 @@ func (s *Search) ToRequest() (*http.Request, error) {
 type SearchResponse struct {
 	TXS        []*Transaction `json:"data"`
 	TotalCount uint64         `json:"total_count"`
+}
+
+type Response struct {
+	Data       interface{}       `json:"data"`
+	TotalCount uint64            `json:"total_count"`
+	Error      bool              `json:"error"`
+	Errors     map[string]string `json:"errors"`
+	Detail     string            `json:"detail"`
 }
