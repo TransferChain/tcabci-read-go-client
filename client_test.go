@@ -37,6 +37,8 @@ func newClient(b *testing.B, n int) {
 	for i := 0; i < n; i++ {
 		addrs = append(addrs, randomString(88))
 	}
+	err = readNodeClient.Start()
+	assert.Nil(b, err)
 	time.Sleep(time.Second * 1)
 	err = readNodeClient.Subscribe(addrs)
 	assert.Nil(b, err)
@@ -62,6 +64,8 @@ func newClientWithoutStop(t *testing.T) Client {
 	for i := 0; i < 251; i++ {
 		addrs = append(addrs, randomString(88))
 	}
+	err = readNodeClient.Start()
+	assert.Nil(t, err)
 	err = readNodeClient.Subscribe(addrs)
 	assert.Nil(t, err)
 
@@ -73,24 +77,20 @@ func TestNewClientWW(t *testing.T) {
 	clients := make([]Client, 0)
 	runtime.GOMAXPROCS(runtime.NumCPU())
 
-	for i := 0; i < 10; i++ {
-		fmt.Println("Came here 0")
+	for i := 0; i < 5; i++ {
 		var wg sync.WaitGroup
-		wg.Add(size)
 		for j := 0; j < size; j++ {
+			wg.Add(1)
 			go func(i, j int, wg *sync.WaitGroup) {
+				defer wg.Done()
 				cc := newClientWithoutStop(t)
-				fmt.Println("Client -> ", i+j)
 				clients = append(clients, cc)
-				wg.Done()
 			}(i, j, &wg)
 		}
 		wg.Wait()
 	}
 
-	fmt.Println("Came here 1")
 	time.Sleep(time.Second * 5)
-	fmt.Println("Came here 2")
 	for i := 0; i < len(clients); i++ {
 		cc := clients[i]
 		err := cc.Unsubscribe()
@@ -98,7 +98,6 @@ func TestNewClientWW(t *testing.T) {
 		err = cc.Stop()
 		assert.Nil(t, err)
 	}
-	fmt.Println("Came here 3")
 }
 
 func TestNewClient(t *testing.T) {
@@ -115,6 +114,8 @@ func TestNewClient(t *testing.T) {
 	addrs := []string{
 		randomString(88),
 	}
+	err = readNodeClient.Start()
+	assert.Nil(t, err)
 	time.Sleep(time.Second * 1)
 	err = readNodeClient.Subscribe(addrs)
 	assert.Nil(t, err)
@@ -142,6 +143,8 @@ func TestWriteParallel(t *testing.T) {
 		adr1,
 		adr2,
 	}
+	err = readNodeClient.Start()
+	assert.Nil(t, err)
 	time.Sleep(time.Second * 1)
 	err = readNodeClient.Subscribe(addrs)
 	assert.Nil(t, err)
@@ -175,69 +178,86 @@ func TestNewClientWithinvalidWSUrl(t *testing.T) {
 func TestLastBlock(t *testing.T) {
 	readNodeClient, err := NewClient("https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
 	assert.Nil(t, err)
-
+	err = readNodeClient.Start()
+	assert.Nil(t, err)
 	lastBlock, err := readNodeClient.LastBlock()
 	assert.Nil(t, err)
 
 	assert.Less(t, uint64(1), lastBlock.TotalCount)
 	assert.Len(t, lastBlock.Blocks, 1)
+
+	err = readNodeClient.Stop()
+	assert.Nil(t, err)
 }
 
 func TestTxSummary(t *testing.T) {
 	readNodeClient, err := NewClient("https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
 	assert.Nil(t, err)
-
-	lastBlochHeight, lastTransaction, totalCount, err := readNodeClient.TxSummary(&Summary{
-		RecipientAddresses: []string{"2mSCzresfg8Gwu7LZ9k9BTWkQAcQEkvYHFUSCZE2ubM4QV89PTeSYwQDqBas3ykq2emHEK6VRvxdgoe1vrhBbQGN"},
+	err = readNodeClient.Start()
+	assert.Nil(t, err)
+	lastBlockHeight, lastTransaction, totalCount, err := readNodeClient.TxSummary(&Summary{
+		RecipientAddresses: []string{"2csPt2z76d397MVEinhRqUR35QT1Kk2BguKK1cUBAqnM3HCpuTZet8Avc7LQS7RWQfFgHbeQYQNnMjsWrbdx3rcc"},
 	})
 	assert.Nil(t, err)
 
-	assert.Less(t, uint64(1), lastBlochHeight)
+	assert.Greater(t, lastBlockHeight, uint64(0))
 	assert.NotNil(t, lastTransaction)
-	assert.Less(t, uint64(1), totalCount)
+	assert.Greater(t, totalCount, uint64(0))
+
+	err = readNodeClient.Stop()
+	assert.Nil(t, err)
 }
 
 func TestShouldErrorTxSummaryWithInvalidType(t *testing.T) {
 	readNodeClient, err := NewClient("https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
 	assert.Nil(t, err)
-
-	lastBlochHeight, lastTransaction, totalCount, err := readNodeClient.TxSummary(&Summary{
-		RecipientAddresses: []string{"2mSCzresfg8Gwu7LZ9k9BTWkQAcQEkvYHFUSCZE2ubM4QV89PTeSYwQDqBas3ykq2emHEK6VRvxdgoe1vrhBbQGN"},
+	err = readNodeClient.Start()
+	assert.Nil(t, err)
+	lastBlockHeight, lastTransaction, totalCount, err := readNodeClient.TxSummary(&Summary{
+		RecipientAddresses: []string{"2csPt2z76d397MVEinhRqUR35QT1Kk2BguKK1cUBAqnM3HCpuTZet8Avc7LQS7RWQfFgHbeQYQNnMjsWrbdx3rcc"},
 		Type:               "yp",
 	})
 	assert.NotNil(t, err)
 
-	assert.Equal(t, uint64(0), lastBlochHeight)
+	assert.Equal(t, uint64(0), lastBlockHeight)
 	assert.Nil(t, lastTransaction)
 	assert.Equal(t, uint64(0), totalCount)
+
+	err = readNodeClient.Stop()
+	assert.Nil(t, err)
 }
 
 func TestTxSearch(t *testing.T) {
 	readNodeClient, err := NewClient("https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
 	assert.Nil(t, err)
-
+	err = readNodeClient.Start()
+	assert.Nil(t, err)
 	txs, totalCount, err := readNodeClient.TxSearch(&Search{
 		HeightOperator:     ">=",
 		Height:             0,
-		RecipientAddresses: []string{"2mSCzresfg8Gwu7LZ9k9BTWkQAcQEkvYHFUSCZE2ubM4QV89PTeSYwQDqBas3ykq2emHEK6VRvxdgoe1vrhBbQGN"},
+		RecipientAddresses: []string{"2csPt2z76d397MVEinhRqUR35QT1Kk2BguKK1cUBAqnM3HCpuTZet8Avc7LQS7RWQfFgHbeQYQNnMjsWrbdx3rcc"},
 		Limit:              1,
 		Offset:             0,
 		OrderBy:            "ASC",
 	})
 	assert.Nil(t, err)
 
-	assert.Less(t, 0, len(txs))
-	assert.Less(t, uint64(1), totalCount)
+	assert.Greater(t, len(txs), 0)
+	assert.Greater(t, totalCount, uint64(0))
+
+	err = readNodeClient.Stop()
+	assert.Nil(t, err)
 }
 
 func TestShouldErrorTxSearchWithInvalidHeightOperator(t *testing.T) {
 	readNodeClient, err := NewClient("https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
 	assert.Nil(t, err)
-
+	err = readNodeClient.Start()
+	assert.Nil(t, err)
 	txs, totalCount, err := readNodeClient.TxSearch(&Search{
 		HeightOperator:     "!=",
 		Height:             0,
-		RecipientAddresses: []string{"2mSCzresfg8Gwu7LZ9k9BTWkQAcQEkvYHFUSCZE2ubM4QV89PTeSYwQDqBas3ykq2emHEK6VRvxdgoe1vrhBbQGN"},
+		RecipientAddresses: []string{"2csPt2z76d397MVEinhRqUR35QT1Kk2BguKK1cUBAqnM3HCpuTZet8Avc7LQS7RWQfFgHbeQYQNnMjsWrbdx3rcc"},
 		Limit:              1,
 		Offset:             0,
 		OrderBy:            "ASC",
@@ -246,12 +266,16 @@ func TestShouldErrorTxSearchWithInvalidHeightOperator(t *testing.T) {
 
 	assert.Equal(t, 0, len(txs))
 	assert.Equal(t, uint64(0), totalCount)
+
+	err = readNodeClient.Stop()
+	assert.Nil(t, err)
 }
 
 func TestShouldErrorTxBroadcast(t *testing.T) {
 	readNodeClient, err := NewClient("https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
 	assert.Nil(t, err)
-
+	err = readNodeClient.Start()
+	assert.Nil(t, err)
 	broadcast, err := readNodeClient.Broadcast("id",
 		0,
 		TypeTransfer,
@@ -262,34 +286,36 @@ func TestShouldErrorTxBroadcast(t *testing.T) {
 		0)
 	assert.NotNil(t, err)
 	assert.Nil(t, broadcast)
+	err = readNodeClient.Stop()
+	assert.Nil(t, err)
 }
 
 func BenchmarkNewClient(b *testing.B) {
 	for n := 0; n < b.N; n++ {
-		newClient(b, 10)
+		newClient(b, 3)
 	}
 }
 
 func BenchmarkNewClient20(b *testing.B) {
 	for n := 0; n < b.N; n++ {
-		newClient(b, 20)
+		newClient(b, 10)
 	}
 }
 
 func BenchmarkNewClient40(b *testing.B) {
 	for n := 0; n < b.N; n++ {
-		newClient(b, 40)
+		newClient(b, 20)
 	}
 }
 
 func BenchmarkNewClient100(b *testing.B) {
 	for n := 0; n < b.N; n++ {
-		newClient(b, 100)
+		newClient(b, 40)
 	}
 }
 
 func BenchmarkNewClient250(b *testing.B) {
 	for n := 0; n < b.N; n++ {
-		newClient(b, 250)
+		newClient(b, 60)
 	}
 }

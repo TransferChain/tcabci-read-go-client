@@ -26,6 +26,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"runtime"
 	"sync"
 	"time"
 )
@@ -104,7 +105,7 @@ type sendMsg struct {
 // NewClient make ws client
 func NewClient(address string, wsAddress string) (Client, error) {
 	c := new(client)
-	c.version = "v1.2.7"
+	c.version = "v1.2.8"
 	c.address = address
 	c.wsAddress = wsAddress
 
@@ -147,7 +148,8 @@ func NewClient(address string, wsAddress string) (Client, error) {
 		Jar:              nil,
 	}
 
-	c.receivedCh = make(chan Received)
+	c.sendBuf = make(chan sendMsg, runtime.NumCPU())
+	c.receivedCh = make(chan Received, runtime.NumCPU())
 
 	c.httpClient = http.DefaultClient
 
@@ -314,6 +316,11 @@ func (c *client) Write(b []byte) error {
 }
 
 func (c *client) write(sm sendMsg) (err error) {
+	_, ok := c.mainCtx.Deadline()
+	if ok {
+		return errors.New("deadline exceeded")
+	}
+
 	ctx, cancel := context.WithTimeout(c.mainCtx, time.Millisecond*15)
 	writing := false
 	for writing {
@@ -625,7 +632,7 @@ func (c *client) TxSummary(summary *Summary) (lastBlockHeight uint64, lastTransa
 	}()
 
 	if resp.StatusCode != 200 {
-		err = errors.New("transaction can not be broadcast")
+		err = errors.New("transaction requests")
 		return 0, nil, 0, err
 	}
 
