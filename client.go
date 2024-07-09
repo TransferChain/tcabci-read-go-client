@@ -105,7 +105,7 @@ type sendMsg struct {
 // NewClient make ws client
 func NewClient(address string, wsAddress string) (Client, error) {
 	c := new(client)
-	c.version = "v1.2.7"
+	c.version = "v1.2.8"
 	c.address = address
 	c.wsAddress = wsAddress
 
