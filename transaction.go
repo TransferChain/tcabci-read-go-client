@@ -40,6 +40,7 @@ const (
 	TypeSubMaster             Type = "initial_sub_storage"
 	TypeSubAddresses          Type = "interim_sub_storages"
 	TypeAccount               Type = "initial_account"
+	TypeAccountInitialTXS     Type = "initial_account_txs"
 	TypeMessage               Type = "message"
 	TypeMessageSent           Type = "inherit_message"
 	TypeMessageThreadDelete   Type = "inherit_message_recv"
@@ -88,6 +89,7 @@ var TypesSlice = []Type{
 	TypeSubMaster,
 	TypeSubAddresses,
 	TypeAccount,
+	TypeAccountInitialTXS,
 	TypeMessage,
 	TypeMessageSent,
 	TypeMessageThreadDelete,
