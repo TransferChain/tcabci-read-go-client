@@ -43,7 +43,8 @@ const (
 	// Time allowed to read the next pong message from the peer.
 	pongWait = 10 * time.Second
 	// Send pings to peer with this period. Must be less than pongWait.
-	pingPeriod = (pongWait * 9) / 10
+	pingPeriod       = (pongWait * 9) / 10
+	HandshakeTimeout = 5 * time.Second
 )
 
 type typ int
@@ -69,6 +70,9 @@ type Client interface {
 }
 
 type client struct {
+	ctx                 context.Context
+	mainCtx             context.Context
+	mainCtxCancel       context.CancelFunc
 	conn                *websocket.Conn
 	address             string
 	wsAddress           string
@@ -76,9 +80,7 @@ type client struct {
 	wsURL               *url.URL
 	headers             http.Header
 	wsHeaders           http.Header
-	ctx                 context.Context
-	mainCtx             context.Context
-	mainCtxCancel       context.CancelFunc
+	response            *http.Response
 	version             string
 	subscribed          bool
 	connected           bool
@@ -104,52 +106,57 @@ type sendMsg struct {
 
 // NewClient make ws client
 func NewClient(address string, wsAddress string) (Client, error) {
-	c := new(client)
-	c.version = "v1.2.9"
-	c.address = address
-	c.wsAddress = wsAddress
+	return newClient(context.Background(), address, wsAddress)
+}
 
-	var err error
+// NewClientContext make ws client with context
+func NewClientContext(ctx context.Context, address string, wsAddress string) (Client, error) {
+	return newClient(ctx, address, wsAddress)
+}
 
-	c.url, err = url.Parse(c.address)
+func newClient(ctx context.Context, address string, wsAddress string) (Client, error) {
+	aURL, err := url.Parse(address)
 	if err != nil {
 		return nil, err
 	}
 
-	if c.url.Scheme != "https" && c.url.Scheme != "http" {
+	if aURL.Scheme != "https" && aURL.Scheme != "http" {
 		return nil, errors.New("invalid address")
 	}
 
-	c.wsURL, err = url.Parse(c.wsAddress)
+	wsURL, err := url.Parse(wsAddress)
 	if err != nil {
 		return nil, err
 	}
 
-	if c.wsURL.Scheme != "wss" && c.wsURL.Scheme != "ws" {
+	if wsURL.Scheme != "wss" && wsURL.Scheme != "ws" {
 		return nil, errors.New("invalid websocket address")
 	}
 
-	c.headers = http.Header{}
-	c.headers.Set("Client", fmt.Sprintf("tcabaci-read-go-client-%s", c.version))
-
-	c.wsHeaders = http.Header{}
-	c.wsHeaders.Set("Client", fmt.Sprintf("tcabaci-read-go-client-%s", c.version))
-
-	c.ctx = context.Background()
-	c.subscribedAddresses = make(map[string]bool)
-	c.subscribed = false
-	c.connected = false
-	c.handshakeTimeout = 3 * time.Second
-	c.dialer = &websocket.Dialer{
-		Proxy:            http.ProxyFromEnvironment,
-		HandshakeTimeout: c.handshakeTimeout,
-		ReadBufferSize:   512 * 1024,
-		WriteBufferSize:  512 * 1024,
-		Jar:              nil,
+	c := &client{
+		ctx:                 ctx,
+		version:             "v2.1.1",
+		address:             address,
+		wsAddress:           wsAddress,
+		url:                 aURL,
+		wsURL:               wsURL,
+		headers:             http.Header{},
+		wsHeaders:           http.Header{},
+		subscribedAddresses: make(map[string]bool),
+		handshakeTimeout:    HandshakeTimeout,
+		dialer: &websocket.Dialer{
+			Proxy:             http.ProxyFromEnvironment,
+			HandshakeTimeout:  HandshakeTimeout,
+			ReadBufferSize:    512 * 1024,
+			WriteBufferSize:   512 * 1024,
+			EnableCompression: true,
+		},
+		sendBuf:    make(chan sendMsg, runtime.NumCPU()),
+		receivedCh: make(chan Received, runtime.NumCPU()),
 	}
 
-	c.sendBuf = make(chan sendMsg, runtime.NumCPU())
-	c.receivedCh = make(chan Received, runtime.NumCPU())
+	c.headers.Set("Client", fmt.Sprintf("tcabaci-read-go-client-%s", c.version))
+	c.wsHeaders.Set("Client", fmt.Sprintf("tcabaci-read-go-client-%s", c.version))
 
 	c.httpClient = http.DefaultClient
 
@@ -259,11 +266,12 @@ func (c *client) connect(reconnect bool) (*websocket.Conn, error) {
 			return nil, errors.New("main context canceled")
 		default:
 			currentState := c.isConnected()
-			conn, _, err := c.dialer.Dial(c.wsURL.String(),
+			conn, response, err := c.dialer.DialContext(c.ctx, c.wsURL.String(),
 				c.wsHeaders)
 
 			c.mut.Lock()
 			c.conn = conn
+			c.response = response
 			c.connected = err == nil
 			c.mut.Unlock()
 
@@ -347,6 +355,7 @@ func (c *client) listenWrite() {
 			continue
 		}
 		var err error
+
 		switch buf.typ {
 		case ping:
 			c.mut.Lock()
@@ -520,11 +529,13 @@ func (c *client) subscribe(already bool, addresses []string, txTypes ...Type) er
 		return err
 	}
 
-	c.sendBuf <- sendMsg{
-		typ:        message,
-		messageTyp: websocket.TextMessage,
-		msg:        b,
-	}
+	go func() {
+		c.sendBuf <- sendMsg{
+			typ:        message,
+			messageTyp: websocket.TextMessage,
+			msg:        b,
+		}
+	}()
 
 	tmp := make(map[string]bool)
 	for i := 0; i < len(tAddresses); i++ {
