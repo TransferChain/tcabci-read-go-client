@@ -1,6 +1,7 @@
 package tcabcireadgoclient
 
 import (
+	"context"
 	"crypto/rand"
 	"fmt"
 	"github.com/stretchr/testify/assert"
@@ -22,8 +23,8 @@ func randomString(n int) string {
 	return string(ret)
 }
 
-func newClient(b *testing.B, n int) {
-	readNodeClient, err := NewClient("https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
+func newTestClient(b *testing.B, n int) {
+	readNodeClient, err := NewClientContext(context.Background(), "https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
 	assert.Nil(b, err)
 
 	//done := make(chan struct{})
@@ -49,8 +50,8 @@ func newClient(b *testing.B, n int) {
 	assert.Nil(b, err)
 }
 
-func newClientWithoutStop(t *testing.T) Client {
-	readNodeClient, err := NewClient("https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
+func newTestClientWithoutStop(t *testing.T) Client {
+	readNodeClient, err := NewClientContext(context.Background(), "https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
 	assert.Nil(t, err)
 
 	//done := make(chan struct{})
@@ -83,7 +84,7 @@ func TestNewClientWW(t *testing.T) {
 			wg.Add(1)
 			go func(i, j int, wg *sync.WaitGroup) {
 				defer wg.Done()
-				cc := newClientWithoutStop(t)
+				cc := newTestClientWithoutStop(t)
 				clients = append(clients, cc)
 			}(i, j, &wg)
 		}
@@ -100,8 +101,8 @@ func TestNewClientWW(t *testing.T) {
 	}
 }
 
-func TestNewClient(t *testing.T) {
-	readNodeClient, err := NewClient("https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
+func TestNewClientContext(t *testing.T) {
+	readNodeClient, err := NewClientContext(context.Background(), "https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
 	assert.Nil(t, err)
 
 	//done := make(chan struct{})
@@ -127,7 +128,7 @@ func TestNewClient(t *testing.T) {
 }
 
 func TestWriteParallel(t *testing.T) {
-	readNodeClient, err := NewClient("https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
+	readNodeClient, err := NewClientContext(context.Background(), "https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
 	assert.Nil(t, err)
 
 	//done := make(chan struct{})
@@ -154,9 +155,7 @@ func TestWriteParallel(t *testing.T) {
 	for i := 0; i < lim; i++ {
 		go func(i int, ch chan bool) {
 			err := readNodeClient.Write([]byte(fmt.Sprintf("%d", i)))
-			if err != nil {
-				fmt.Println(err)
-			}
+			assert.Nil(t, err)
 			time.Sleep(time.Second)
 			if i == lim-1 {
 				ch <- true
@@ -170,13 +169,13 @@ func TestWriteParallel(t *testing.T) {
 }
 
 func TestNewClientWithinvalidWSUrl(t *testing.T) {
-	readNodeClient, err := NewClient("htt://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
+	readNodeClient, err := NewClientContext(context.Background(), "htt://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
 	assert.NotNil(t, err)
 	assert.Nil(t, readNodeClient)
 }
 
 func TestLastBlock(t *testing.T) {
-	readNodeClient, err := NewClient("https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
+	readNodeClient, err := NewClientContext(context.Background(), "https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
 	assert.Nil(t, err)
 	err = readNodeClient.Start()
 	assert.Nil(t, err)
@@ -191,7 +190,7 @@ func TestLastBlock(t *testing.T) {
 }
 
 func TestTxSummary(t *testing.T) {
-	readNodeClient, err := NewClient("https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
+	readNodeClient, err := NewClientContext(context.Background(), "https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
 	assert.Nil(t, err)
 	err = readNodeClient.Start()
 	assert.Nil(t, err)
@@ -209,7 +208,7 @@ func TestTxSummary(t *testing.T) {
 }
 
 func TestShouldErrorTxSummaryWithInvalidType(t *testing.T) {
-	readNodeClient, err := NewClient("https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
+	readNodeClient, err := NewClientContext(context.Background(), "https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
 	assert.Nil(t, err)
 	err = readNodeClient.Start()
 	assert.Nil(t, err)
@@ -228,7 +227,7 @@ func TestShouldErrorTxSummaryWithInvalidType(t *testing.T) {
 }
 
 func TestTxSearch(t *testing.T) {
-	readNodeClient, err := NewClient("https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
+	readNodeClient, err := NewClientContext(context.Background(), "https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
 	assert.Nil(t, err)
 	err = readNodeClient.Start()
 	assert.Nil(t, err)
@@ -250,7 +249,7 @@ func TestTxSearch(t *testing.T) {
 }
 
 func TestShouldErrorTxSearchWithInvalidHeightOperator(t *testing.T) {
-	readNodeClient, err := NewClient("https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
+	readNodeClient, err := NewClientContext(context.Background(), "https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
 	assert.Nil(t, err)
 	err = readNodeClient.Start()
 	assert.Nil(t, err)
@@ -272,7 +271,7 @@ func TestShouldErrorTxSearchWithInvalidHeightOperator(t *testing.T) {
 }
 
 func TestShouldErrorTxBroadcast(t *testing.T) {
-	readNodeClient, err := NewClient("https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
+	readNodeClient, err := NewClientContext(context.Background(), "https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
 	assert.Nil(t, err)
 	err = readNodeClient.Start()
 	assert.Nil(t, err)
@@ -290,32 +289,32 @@ func TestShouldErrorTxBroadcast(t *testing.T) {
 	assert.Nil(t, err)
 }
 
-func BenchmarkNewClient(b *testing.B) {
+func BenchmarkNewClientContext(b *testing.B) {
 	for n := 0; n < b.N; n++ {
-		newClient(b, 3)
+		newTestClient(b, 3)
 	}
 }
 
 func BenchmarkNewClient20(b *testing.B) {
 	for n := 0; n < b.N; n++ {
-		newClient(b, 10)
+		newTestClient(b, 10)
 	}
 }
 
 func BenchmarkNewClient40(b *testing.B) {
 	for n := 0; n < b.N; n++ {
-		newClient(b, 20)
+		newTestClient(b, 20)
 	}
 }
 
 func BenchmarkNewClient100(b *testing.B) {
 	for n := 0; n < b.N; n++ {
-		newClient(b, 40)
+		newTestClient(b, 40)
 	}
 }
 
 func BenchmarkNewClient250(b *testing.B) {
 	for n := 0; n < b.N; n++ {
-		newClient(b, 60)
+		newTestClient(b, 60)
 	}
 }
