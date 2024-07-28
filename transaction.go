@@ -73,6 +73,7 @@ const (
 	TypeMultiTransfer         Type = "multi_transfer"
 	TypeMultiTransferSent     Type = "multi_transfer_sent"
 	TypeMultiBackup           Type = "multi_backup"
+	TypeMultiDataRoom         Type = "multi_data_room"
 	TypePasswdData            Type = "passwd_data"
 	TypePasswdRoom            Type = "passwd_room"
 	TypePasswdRoomPolicy      Type = "passwd_room_policy"
@@ -122,6 +123,7 @@ var TypesSlice = []Type{
 	TypeMultiTransfer,
 	TypeMultiTransferSent,
 	TypeMultiBackup,
+	TypeMultiDataRoom,
 	TypePasswdData,
 	TypePasswdRoom,
 	TypePasswdRoomPolicy,
@@ -133,6 +135,7 @@ var TypesSlice = []Type{
 
 // Transaction read node transaction model
 type Transaction struct {
+	Order         *uint64     `json:"order,omitempty"`
 	ID            interface{} `json:"id"`
 	BlockID       uint64      `json:"block_id"`
 	Height        uint64      `json:"height"`

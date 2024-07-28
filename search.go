@@ -53,17 +53,19 @@ const (
 )
 
 type Search struct {
-	HeightOperator     HeightOperator `json:"-"`
+	Limit              uint           `json:"limit"`
 	Height             uint64         `json:"-"`
+	Offset             uint64         `json:"offset"`
+	MaxHeight          uint64         `json:"max_height"`
+	LastOrder          uint64         `json:"last_order"`
+	Type               Type           `json:"typ,omitempty"`
 	PHeight            string         `json:"height,omitempty"`
+	OrderBy            OrderBy        `json:"order_by,omitempty"`
+	OrderField         string         `json:"order_field,omitempty"`
+	HeightOperator     HeightOperator `json:"-"`
 	RecipientAddresses []string       `json:"recipient_addrs,omitempty"`
 	SenderAddresses    []string       `json:"sender_addrs,omitempty"`
 	Hashes             []string       `json:"hashes,omitempty"`
-	Type               Type           `json:"typ,omitempty"`
-	Limit              uint           `json:"limit,omitempty"`
-	Offset             uint64         `json:"offset,omitempty"`
-	OrderField         string         `json:"order_field,omitempty"`
-	OrderBy            OrderBy        `json:"order_by,omitempty"`
 }
 
 func (s *Search) URI() string {
