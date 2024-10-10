@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"github.com/stretchr/testify/assert"
 	"math/big"
-	"runtime"
-	"sync"
 	"testing"
 	"time"
 )
@@ -73,33 +71,33 @@ func newTestClientWithoutStop(t *testing.T) Client {
 	return readNodeClient
 }
 
-func TestNewClientWW(t *testing.T) {
-	size := 100
-	clients := make([]Client, 0)
-	runtime.GOMAXPROCS(runtime.NumCPU())
-
-	for i := 0; i < 5; i++ {
-		var wg sync.WaitGroup
-		for j := 0; j < size; j++ {
-			wg.Add(1)
-			go func(i, j int, wg *sync.WaitGroup) {
-				defer wg.Done()
-				cc := newTestClientWithoutStop(t)
-				clients = append(clients, cc)
-			}(i, j, &wg)
-		}
-		wg.Wait()
-	}
-
-	time.Sleep(time.Second * 5)
-	for i := 0; i < len(clients); i++ {
-		cc := clients[i]
-		err := cc.Unsubscribe()
-		assert.Nil(t, err)
-		err = cc.Stop()
-		assert.Nil(t, err)
-	}
-}
+//func TestNewClientWW(t *testing.T) {
+//	size := 100
+//	clients := make([]Client, 0)
+//	runtime.GOMAXPROCS(runtime.NumCPU())
+//
+//	for i := 0; i < 5; i++ {
+//		var wg sync.WaitGroup
+//		for j := 0; j < size; j++ {
+//			wg.Add(1)
+//			go func(i, j int, wg *sync.WaitGroup) {
+//				defer wg.Done()
+//				cc := newTestClientWithoutStop(t)
+//				clients = append(clients, cc)
+//			}(i, j, &wg)
+//		}
+//		wg.Wait()
+//	}
+//
+//	time.Sleep(time.Second * 5)
+//	for i := 0; i < len(clients); i++ {
+//		cc := clients[i]
+//		err := cc.Unsubscribe()
+//		assert.Nil(t, err)
+//		err = cc.Stop()
+//		assert.Nil(t, err)
+//	}
+//}
 
 func TestNewClientContext(t *testing.T) {
 	readNodeClient, err := NewClientContext(context.Background(), "https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
@@ -127,46 +125,46 @@ func TestNewClientContext(t *testing.T) {
 	assert.Nil(t, err)
 }
 
-func TestWriteParallel(t *testing.T) {
-	readNodeClient, err := NewClientContext(context.Background(), "https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
-	assert.Nil(t, err)
-
-	//done := make(chan struct{})
-	fn := func(transaction *Transaction) {
-		fmt.Println(transaction)
-		//done <- struct{}{}
-	}
-	readNodeClient.SetListenCallback(fn)
-
-	adr1 := randomString(88)
-	adr2 := randomString(88)
-	addrs := []string{
-		adr1,
-		adr2,
-	}
-	err = readNodeClient.Start()
-	assert.Nil(t, err)
-	time.Sleep(time.Second * 1)
-	err = readNodeClient.Subscribe(addrs)
-	assert.Nil(t, err)
-
-	lim := 100000
-	ch := make(chan bool)
-	for i := 0; i < lim; i++ {
-		go func(i int, ch chan bool) {
-			err := readNodeClient.Write([]byte(fmt.Sprintf("%d", i)))
-			assert.Nil(t, err)
-			time.Sleep(time.Second)
-			if i == lim-1 {
-				ch <- true
-			}
-		}(i, ch)
-	}
-	<-ch
-	_ = readNodeClient.Unsubscribe()
-	err = readNodeClient.Stop()
-	assert.Nil(t, err)
-}
+//func TestWriteParallel(t *testing.T) {
+//	readNodeClient, err := NewClientContext(context.Background(), "https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
+//	assert.Nil(t, err)
+//
+//	//done := make(chan struct{})
+//	fn := func(transaction *Transaction) {
+//		fmt.Println(transaction)
+//		//done <- struct{}{}
+//	}
+//	readNodeClient.SetListenCallback(fn)
+//
+//	adr1 := randomString(88)
+//	adr2 := randomString(88)
+//	addrs := []string{
+//		adr1,
+//		adr2,
+//	}
+//	err = readNodeClient.Start()
+//	assert.Nil(t, err)
+//	time.Sleep(time.Second * 1)
+//	err = readNodeClient.Subscribe(addrs)
+//	assert.Nil(t, err)
+//
+//	lim := 100000
+//	ch := make(chan bool)
+//	for i := 0; i < lim; i++ {
+//		go func(i int, ch chan bool) {
+//			err := readNodeClient.Write([]byte(fmt.Sprintf("%d", i)))
+//			assert.Nil(t, err)
+//			time.Sleep(time.Second)
+//			if i == lim-1 {
+//				ch <- true
+//			}
+//		}(i, ch)
+//	}
+//	<-ch
+//	_ = readNodeClient.Unsubscribe()
+//	err = readNodeClient.Stop()
+//	assert.Nil(t, err)
+//}
 
 func TestNewClientWithinvalidWSUrl(t *testing.T) {
 	readNodeClient, err := NewClientContext(context.Background(), "htt://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")

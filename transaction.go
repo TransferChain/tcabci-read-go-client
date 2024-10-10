@@ -48,6 +48,7 @@ const (
 	TypeTransferCancel        Type = "transfer_Cancel"
 	TypeTransferSent          Type = "transfer_sent"
 	TypeTransferReceiveDelete Type = "transfer_receive_delete"
+	TypeTransferInfo          Type = "transfer_info"
 	TypeStorage               Type = "storage"
 	TypeStorageDelete         Type = "storage_delete"
 	TypeBackup                Type = "backup"
@@ -98,6 +99,7 @@ var TypesSlice = []Type{
 	TypeTransferCancel,
 	TypeTransferSent,
 	TypeTransferReceiveDelete,
+	TypeTransferInfo,
 	TypeStorage,
 	TypeStorageDelete,
 	TypeBackup,
