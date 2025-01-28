@@ -64,6 +64,7 @@ type Client interface {
 	Unsubscribe() error
 	Write(b []byte) error
 	LastBlock() (*LastBlock, error)
+	Tx(id string) (*Transaction, error)
 	TxSummary(summary *Summary) (lastBlockHeight uint64, lastTransaction *Transaction, totalCount uint64, err error)
 	TxSearch(search *Search) (txs []*Transaction, totalCount uint64, err error)
 	Broadcast(id string, version uint32, typ Type, data []byte, senderAddress, recipientAddress string, sign []byte, fee uint64) (*BroadcastResponse, error)
@@ -135,7 +136,7 @@ func newClient(ctx context.Context, address string, wsAddress string) (Client, e
 
 	c := &client{
 		ctx:                 ctx,
-		version:             "v1.2.15",
+		version:             "v1.2.16",
 		address:             address,
 		wsAddress:           wsAddress,
 		url:                 aURL,
@@ -613,6 +614,39 @@ func (c *client) LastBlock() (*LastBlock, error) {
 	}
 
 	return &lastBlock, nil
+}
+
+func (c *client) Tx(id string) (*Transaction, error) {
+	if id == "" {
+		return nil, errors.New("invalid tx id")
+	}
+
+	var txResponse Response
+	txResponse.Data = &Transaction{}
+
+	resp, err := c.httpClient.Get(c.address + "/v1/tx/" + id)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	_ = resp.Body.Close()
+	if err = json.Unmarshal(b, &txResponse); err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, errors.New(txResponse.Detail)
+	}
+
+	return txResponse.Data.(*Transaction), nil
 }
 
 // TxSummary fetch summary with given parameters
