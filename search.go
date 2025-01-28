@@ -136,11 +136,3 @@ type SearchResponse struct {
 	TXS        []*Transaction `json:"data"`
 	TotalCount uint64         `json:"total_count"`
 }
-
-type Response struct {
-	Data       interface{}       `json:"data"`
-	TotalCount uint64            `json:"total_count"`
-	Error      bool              `json:"error"`
-	Errors     map[string]string `json:"errors"`
-	Detail     string            `json:"detail"`
-}
