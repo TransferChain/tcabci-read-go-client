@@ -187,6 +187,20 @@ func TestLastBlock(t *testing.T) {
 	assert.Nil(t, err)
 }
 
+func TestShowTx(t *testing.T) {
+	readNodeClient, err := NewClientContext(context.Background(), "https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
+	assert.Nil(t, err)
+	err = readNodeClient.Start()
+	assert.Nil(t, err)
+	ttx, err := readNodeClient.Tx("3b4bca4d87886c6424cb11bf77141fa25f1cdc9a51683ff0475ee31c7fadc93a17b680010e88485615a79883f1c77c9b4d4a096f71e7ff4161e4499c05f540f1")
+	assert.Nil(t, err)
+
+	assert.Equal(t, "3b4bca4d87886c6424cb11bf77141fa25f1cdc9a51683ff0475ee31c7fadc93a17b680010e88485615a79883f1c77c9b4d4a096f71e7ff4161e4499c05f540f1", ttx.ID)
+
+	err = readNodeClient.Stop()
+	assert.Nil(t, err)
+}
+
 func TestTxSummary(t *testing.T) {
 	readNodeClient, err := NewClientContext(context.Background(), "https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
 	assert.Nil(t, err)
