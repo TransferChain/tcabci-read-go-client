@@ -10,6 +10,14 @@ import (
 	"time"
 )
 
+var (
+	ctx               = context.Background()
+	readNodeAddress   = "https://test-read-node-01.transferchain.io"
+	readNodeWSAddress = "wss://test-read-node-01.transferchain.io/ws"
+	chainName         = "medusa-testnet"
+	chainVersion      = "v2"
+)
+
 func randomString(n int) string {
 	const letters = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 	ret := make([]byte, n)
@@ -22,7 +30,7 @@ func randomString(n int) string {
 }
 
 func newTestClient(b *testing.B, n int) {
-	readNodeClient, err := NewClientContext(context.Background(), "https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
+	readNodeClient, err := NewClientContext(ctx, readNodeAddress, readNodeWSAddress, chainName, chainVersion)
 	assert.Nil(b, err)
 
 	//done := make(chan struct{})
@@ -49,7 +57,7 @@ func newTestClient(b *testing.B, n int) {
 }
 
 func newTestClientWithoutStop(t *testing.T) Client {
-	readNodeClient, err := NewClientContext(context.Background(), "https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
+	readNodeClient, err := NewClientContext(ctx, readNodeAddress, readNodeWSAddress, chainName, chainVersion)
 	assert.Nil(t, err)
 
 	//done := make(chan struct{})
@@ -100,7 +108,7 @@ func newTestClientWithoutStop(t *testing.T) Client {
 //}
 
 func TestNewClientContext(t *testing.T) {
-	readNodeClient, err := NewClientContext(context.Background(), "https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
+	readNodeClient, err := NewClientContext(ctx, readNodeAddress, readNodeWSAddress, chainName, chainVersion)
 	assert.Nil(t, err)
 
 	//done := make(chan struct{})
@@ -166,18 +174,33 @@ func TestNewClientContext(t *testing.T) {
 //	assert.Nil(t, err)
 //}
 
-func TestNewClientWithinvalidWSUrl(t *testing.T) {
-	readNodeClient, err := NewClientContext(context.Background(), "htt://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
+func TestNewClientWithInvalidWSUrl(t *testing.T) {
+	readNodeClient, err := NewClientContext(ctx, readNodeAddress, "invalid", chainName, chainVersion)
 	assert.NotNil(t, err)
 	assert.Nil(t, readNodeClient)
 }
 
 func TestLastBlock(t *testing.T) {
-	readNodeClient, err := NewClientContext(context.Background(), "https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
+	readNodeClient, err := NewClientContext(ctx, readNodeAddress, readNodeWSAddress, chainName, chainVersion)
 	assert.Nil(t, err)
 	err = readNodeClient.Start()
 	assert.Nil(t, err)
-	lastBlock, err := readNodeClient.LastBlock()
+	lastBlock, err := readNodeClient.LastBlock(nil, nil)
+	assert.Nil(t, err)
+
+	assert.Less(t, uint64(1), lastBlock.TotalCount)
+	assert.Len(t, lastBlock.Blocks, 1)
+
+	err = readNodeClient.Stop()
+	assert.Nil(t, err)
+}
+
+func TestLastBlockWithChainInfo(t *testing.T) {
+	readNodeClient, err := NewClientContext(ctx, readNodeAddress, readNodeWSAddress, chainName, chainVersion)
+	assert.Nil(t, err)
+	err = readNodeClient.Start()
+	assert.Nil(t, err)
+	lastBlock, err := readNodeClient.LastBlock(&chainName, &chainVersion)
 	assert.Nil(t, err)
 
 	assert.Less(t, uint64(1), lastBlock.TotalCount)
@@ -188,26 +211,28 @@ func TestLastBlock(t *testing.T) {
 }
 
 func TestShowTx(t *testing.T) {
-	readNodeClient, err := NewClientContext(context.Background(), "https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
+	readNodeClient, err := NewClientContext(ctx, readNodeAddress, readNodeWSAddress, chainName, chainVersion)
 	assert.Nil(t, err)
 	err = readNodeClient.Start()
 	assert.Nil(t, err)
-	ttx, err := readNodeClient.Tx("3b4bca4d87886c6424cb11bf77141fa25f1cdc9a51683ff0475ee31c7fadc93a17b680010e88485615a79883f1c77c9b4d4a096f71e7ff4161e4499c05f540f1")
+	ttx, err := readNodeClient.Tx("ba6e2b9ebd81f5639e95d2f2a537e481cbfb9e3a358f1d6977043cee532ed40eb2689db5a78373822989141cb57b1e036bf50a36b06578befea228c97749bd73", &chainName, &chainVersion)
 	assert.Nil(t, err)
 
-	assert.Equal(t, "3b4bca4d87886c6424cb11bf77141fa25f1cdc9a51683ff0475ee31c7fadc93a17b680010e88485615a79883f1c77c9b4d4a096f71e7ff4161e4499c05f540f1", ttx.ID)
+	assert.Equal(t, "ba6e2b9ebd81f5639e95d2f2a537e481cbfb9e3a358f1d6977043cee532ed40eb2689db5a78373822989141cb57b1e036bf50a36b06578befea228c97749bd73", ttx.ID)
 
 	err = readNodeClient.Stop()
 	assert.Nil(t, err)
 }
 
 func TestTxSummary(t *testing.T) {
-	readNodeClient, err := NewClientContext(context.Background(), "https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
+	readNodeClient, err := NewClientContext(ctx, readNodeAddress, readNodeWSAddress, chainName, chainVersion)
 	assert.Nil(t, err)
 	err = readNodeClient.Start()
 	assert.Nil(t, err)
 	lastBlockHeight, lastTransaction, totalCount, err := readNodeClient.TxSummary(&Summary{
-		RecipientAddresses: []string{"2csPt2z76d397MVEinhRqUR35QT1Kk2BguKK1cUBAqnM3HCpuTZet8Avc7LQS7RWQfFgHbeQYQNnMjsWrbdx3rcc"},
+		RecipientAddresses: []string{"4DfxnRnZdwM1NvsFgm5uLjCwfyukb5yN27KA3KR31C11mnXa83fT9TvqG8enSnmAZiCorFQQZFsygzx1Pkq8kbD6"},
+		ChainName:          &chainName,
+		ChainVersion:       &chainVersion,
 	})
 	assert.Nil(t, err)
 
@@ -220,13 +245,15 @@ func TestTxSummary(t *testing.T) {
 }
 
 func TestShouldErrorTxSummaryWithInvalidType(t *testing.T) {
-	readNodeClient, err := NewClientContext(context.Background(), "https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
+	readNodeClient, err := NewClientContext(ctx, readNodeAddress, readNodeWSAddress, chainName, chainVersion)
 	assert.Nil(t, err)
 	err = readNodeClient.Start()
 	assert.Nil(t, err)
 	lastBlockHeight, lastTransaction, totalCount, err := readNodeClient.TxSummary(&Summary{
-		RecipientAddresses: []string{"2csPt2z76d397MVEinhRqUR35QT1Kk2BguKK1cUBAqnM3HCpuTZet8Avc7LQS7RWQfFgHbeQYQNnMjsWrbdx3rcc"},
+		RecipientAddresses: []string{"4DfxnRnZdwM1NvsFgm5uLjCwfyukb5yN27KA3KR31C11mnXa83fT9TvqG8enSnmAZiCorFQQZFsygzx1Pkq8kbD6"},
 		Type:               "yp",
+		ChainName:          &chainName,
+		ChainVersion:       &chainVersion,
 	})
 	assert.NotNil(t, err)
 
@@ -239,14 +266,14 @@ func TestShouldErrorTxSummaryWithInvalidType(t *testing.T) {
 }
 
 func TestTxSearch(t *testing.T) {
-	readNodeClient, err := NewClientContext(context.Background(), "https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
+	readNodeClient, err := NewClientContext(ctx, readNodeAddress, readNodeWSAddress, chainName, chainVersion)
 	assert.Nil(t, err)
 	err = readNodeClient.Start()
 	assert.Nil(t, err)
 	txs, totalCount, err := readNodeClient.TxSearch(&Search{
 		HeightOperator:     ">=",
 		Height:             0,
-		RecipientAddresses: []string{"2csPt2z76d397MVEinhRqUR35QT1Kk2BguKK1cUBAqnM3HCpuTZet8Avc7LQS7RWQfFgHbeQYQNnMjsWrbdx3rcc"},
+		RecipientAddresses: []string{"4DfxnRnZdwM1NvsFgm5uLjCwfyukb5yN27KA3KR31C11mnXa83fT9TvqG8enSnmAZiCorFQQZFsygzx1Pkq8kbD6"},
 		Limit:              1,
 		Offset:             0,
 		OrderBy:            "ASC",
@@ -261,17 +288,19 @@ func TestTxSearch(t *testing.T) {
 }
 
 func TestShouldErrorTxSearchWithInvalidHeightOperator(t *testing.T) {
-	readNodeClient, err := NewClientContext(context.Background(), "https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
+	readNodeClient, err := NewClientContext(ctx, readNodeAddress, readNodeWSAddress, chainName, chainVersion)
 	assert.Nil(t, err)
 	err = readNodeClient.Start()
 	assert.Nil(t, err)
 	txs, totalCount, err := readNodeClient.TxSearch(&Search{
 		HeightOperator:     "!=",
 		Height:             0,
-		RecipientAddresses: []string{"2csPt2z76d397MVEinhRqUR35QT1Kk2BguKK1cUBAqnM3HCpuTZet8Avc7LQS7RWQfFgHbeQYQNnMjsWrbdx3rcc"},
+		RecipientAddresses: []string{"4DfxnRnZdwM1NvsFgm5uLjCwfyukb5yN27KA3KR31C11mnXa83fT9TvqG8enSnmAZiCorFQQZFsygzx1Pkq8kbD6"},
 		Limit:              1,
 		Offset:             0,
 		OrderBy:            "ASC",
+		ChainName:          &chainName,
+		ChainVersion:       &chainVersion,
 	})
 	assert.NotNil(t, err)
 
@@ -283,7 +312,7 @@ func TestShouldErrorTxSearchWithInvalidHeightOperator(t *testing.T) {
 }
 
 func TestShouldErrorTxBroadcast(t *testing.T) {
-	readNodeClient, err := NewClientContext(context.Background(), "https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
+	readNodeClient, err := NewClientContext(ctx, readNodeAddress, readNodeWSAddress, chainName, chainVersion)
 	assert.Nil(t, err)
 	err = readNodeClient.Start()
 	assert.Nil(t, err)

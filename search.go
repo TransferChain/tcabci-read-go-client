@@ -66,6 +66,8 @@ type Search struct {
 	RecipientAddresses []string       `json:"recipient_addrs,omitempty"`
 	SenderAddresses    []string       `json:"sender_addrs,omitempty"`
 	Hashes             []string       `json:"hashes,omitempty"`
+	ChainName          *string        `json:"chain_name,omitempty"`
+	ChainVersion       *string        `json:"chain_version,omitempty"`
 }
 
 func (s *Search) URI() string {
