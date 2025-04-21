@@ -27,6 +27,7 @@ import (
 	"net/http"
 	"net/url"
 	"runtime"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -63,8 +64,8 @@ type Client interface {
 	Subscribe(addresses []string, txTypes ...Type) error
 	Unsubscribe() error
 	Write(b []byte) error
-	LastBlock() (*LastBlock, error)
-	Tx(id string) (*Transaction, error)
+	LastBlock(chainName, chainVersion *string) (*LastBlock, error)
+	Tx(id string, chainName, chainVersion *string) (*Transaction, error)
 	TxSummary(summary *Summary) (lastBlockHeight uint64, lastTransaction *Transaction, totalCount uint64, err error)
 	TxSearch(search *Search) (txs []*Transaction, totalCount uint64, err error)
 	Broadcast(id string, version uint32, typ Type, data []byte, senderAddress, recipientAddress string, sign []byte, fee uint64) (*BroadcastResponse, error)
@@ -77,6 +78,8 @@ type client struct {
 	conn                *websocket.Conn
 	address             string
 	wsAddress           string
+	chainName           string
+	chainVersion        string
 	url                 *url.URL
 	wsURL               *url.URL
 	headers             http.Header
@@ -106,16 +109,16 @@ type sendMsg struct {
 }
 
 // NewClient make ws client
-func NewClient(address string, wsAddress string) (Client, error) {
-	return newClient(context.Background(), address, wsAddress)
+func NewClient(address string, wsAddress string, chainName, chainVersion string) (Client, error) {
+	return newClient(context.Background(), address, wsAddress, chainName, chainVersion)
 }
 
 // NewClientContext make ws client with context
-func NewClientContext(ctx context.Context, address string, wsAddress string) (Client, error) {
-	return newClient(ctx, address, wsAddress)
+func NewClientContext(ctx context.Context, address string, wsAddress string, chainName, chainVersion string) (Client, error) {
+	return newClient(ctx, address, wsAddress, chainName, chainVersion)
 }
 
-func newClient(ctx context.Context, address string, wsAddress string) (Client, error) {
+func newClient(ctx context.Context, address string, wsAddress string, chainName, chainVersion string) (Client, error) {
 	aURL, err := url.Parse(address)
 	if err != nil {
 		return nil, err
@@ -139,27 +142,29 @@ func newClient(ctx context.Context, address string, wsAddress string) (Client, e
 		version:             "v1.2.17",
 		address:             address,
 		wsAddress:           wsAddress,
+		chainName:           chainName,
+		chainVersion:        chainVersion,
 		url:                 aURL,
 		wsURL:               wsURL,
-		headers:             http.Header{},
-		wsHeaders:           http.Header{},
+		headers:             make(http.Header),
+		wsHeaders:           make(http.Header),
 		subscribedAddresses: make(map[string]bool),
 		handshakeTimeout:    HandshakeTimeout,
 		dialer: &websocket.Dialer{
 			Proxy:             http.ProxyFromEnvironment,
 			HandshakeTimeout:  HandshakeTimeout,
-			ReadBufferSize:    512 * 1024,
-			WriteBufferSize:   512 * 1024,
+			ReadBufferSize:    2 * 1024 * 1024,
+			WriteBufferSize:   2 * 1024 * 1024,
 			EnableCompression: true,
 		},
 		sendBuf:    make(chan sendMsg, runtime.NumCPU()),
 		receivedCh: make(chan Received, runtime.NumCPU()),
+		httpClient: http.DefaultClient,
 	}
+	c.httpClient.Timeout = 10 * time.Second
 
 	c.headers.Set("Client", fmt.Sprintf("tcabaci-read-go-client-%s", c.version))
 	c.wsHeaders.Set("Client", fmt.Sprintf("tcabaci-read-go-client-%s", c.version))
-
-	c.httpClient = http.DefaultClient
 
 	return c, nil
 }
@@ -591,10 +596,16 @@ func (c *client) unsubscribe(_ bool) error {
 }
 
 // LastBlock fetch last block in blockchain network
-func (c *client) LastBlock() (*LastBlock, error) {
+func (c *client) LastBlock(chainName, chainVersion *string) (*LastBlock, error) {
 	var lastBlock LastBlock
 
-	resp, err := c.httpClient.Get(c.address + "/v1/blocks?limit=1&offset=0")
+	uri := c.address + "/v1/blocks?limit=1&offset=0"
+	if chainName != nil && chainVersion != nil {
+		uri += "&chain_name=" + *chainName + "&chain_version=" + *chainVersion
+	} else {
+		uri += "&chain_name=" + c.chainName + "&chain_version=" + c.chainVersion
+	}
+	resp, err := c.httpClient.Get(uri)
 	if err != nil {
 		return nil, err
 	}
@@ -616,7 +627,7 @@ func (c *client) LastBlock() (*LastBlock, error) {
 	return &lastBlock, nil
 }
 
-func (c *client) Tx(id string) (*Transaction, error) {
+func (c *client) Tx(id string, chainName, chainVersion *string) (*Transaction, error) {
 	if id == "" {
 		return nil, errors.New("invalid tx id")
 	}
@@ -624,7 +635,14 @@ func (c *client) Tx(id string) (*Transaction, error) {
 	var txResponse Response
 	txResponse.Data = &Transaction{}
 
-	resp, err := c.httpClient.Get(c.address + "/v1/tx/" + id)
+	uri := c.address + "/v1/tx/" + id
+	if chainName != nil && chainVersion != nil {
+		uri += "?chain_name=" + *chainName + "&chain_version=" + *chainVersion
+	} else {
+		uri += "?chain_name=" + c.chainName + "&chain_version=" + c.chainVersion
+	}
+
+	resp, err := c.httpClient.Get(uri)
 	if err != nil {
 		return nil, err
 	}
@@ -656,6 +674,14 @@ func (c *client) TxSummary(summary *Summary) (lastBlockHeight uint64, lastTransa
 		return 0, nil, 0, err
 	}
 
+	if summary.ChainName == nil {
+		summary.ChainName = &c.chainName
+	}
+
+	if summary.ChainVersion == nil {
+		summary.ChainVersion = &c.chainVersion
+	}
+
 	var req *http.Request
 
 	req, err = summary.ToRequest()
@@ -677,7 +703,7 @@ func (c *client) TxSummary(summary *Summary) (lastBlockHeight uint64, lastTransa
 	}()
 
 	if resp.StatusCode != 200 {
-		err = errors.New("transaction requests")
+		err = errors.New("transaction requests " + strconv.Itoa(resp.StatusCode) + " failed")
 		return 0, nil, 0, err
 	}
 
@@ -702,6 +728,14 @@ func (c *client) TxSearch(search *Search) (txs []*Transaction, totalCount uint64
 	if !search.IsValid() {
 		err = errors.New("invalid parameters")
 		return nil, 0, err
+	}
+
+	if search.ChainName == nil {
+		search.ChainName = &c.chainName
+	}
+
+	if search.ChainVersion == nil {
+		search.ChainVersion = &c.chainVersion
 	}
 
 	var req *http.Request
@@ -754,8 +788,20 @@ func (c *client) TxSearch(search *Search) (txs []*Transaction, totalCount uint64
 	return searchResponse.TXS, searchResponse.TotalCount, nil
 }
 
-// Broadcast ...
 func (c *client) Broadcast(id string, version uint32, typ Type, data []byte, senderAddress, recipientAddress string, sign []byte, fee uint64) (*BroadcastResponse, error) {
+	return c.broadcast(id, version, typ, data, senderAddress, recipientAddress, sign, fee, false, false)
+}
+
+func (c *client) BroadcastSync(id string, version uint32, typ Type, data []byte, senderAddress, recipientAddress string, sign []byte, fee uint64) (*BroadcastResponse, error) {
+	return c.broadcast(id, version, typ, data, senderAddress, recipientAddress, sign, fee, false, true)
+}
+
+func (c *client) BroadcastCommit(id string, version uint32, typ Type, data []byte, senderAddress, recipientAddress string, sign []byte, fee uint64) (*BroadcastResponse, error) {
+	return c.broadcast(id, version, typ, data, senderAddress, recipientAddress, sign, fee, true, false)
+}
+
+// Broadcast ...
+func (c *client) broadcast(id string, version uint32, typ Type, data []byte, senderAddress, recipientAddress string, sign []byte, fee uint64, commit, sync bool) (*BroadcastResponse, error) {
 	if !typ.IsValid() {
 		return nil, errors.New("invalid type")
 	}
@@ -779,7 +825,7 @@ func (c *client) Broadcast(id string, version uint32, typ Type, data []byte, sen
 		return nil, err
 	}
 
-	req.URL, _ = url.Parse(c.address + broadcast.URI())
+	req.URL, _ = url.Parse(c.address + broadcast.URI(commit, sync))
 
 	var resp *http.Response
 

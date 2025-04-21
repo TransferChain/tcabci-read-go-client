@@ -24,7 +24,7 @@ import (
 )
 
 func main() {
-	readNodeClient, _ := tcabcireadgoclient.NewClient("https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws")
+	readNodeClient, _ := tcabcireadgoclient.NewClient("https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws", "medusa", "v2")
 
 	if err := readNodeClient.Start(); err != nil {
 		log.Fatal(err)

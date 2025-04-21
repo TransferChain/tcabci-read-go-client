@@ -17,7 +17,15 @@ type Broadcast struct {
 	Fee           uint64 `json:"fee"`
 }
 
-func (b *Broadcast) URI() string {
+func (b *Broadcast) URI(commit, sync bool) string {
+	if commit {
+		return "/v1/tx/commit"
+	}
+
+	if sync {
+		return "/v1/tx/sync"
+	}
+	
 	return "/v1/tx"
 }
 
