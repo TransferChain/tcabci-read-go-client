@@ -10,6 +10,8 @@ type Summary struct {
 	RecipientAddresses []string `json:"recipient_addrs,omitempty"`
 	SenderAddresses    []string `json:"sender_addrs,omitempty"`
 	Type               Type     `json:"typ,omitempty"`
+	ChainName          *string  `json:"chain_name,omitempty"`
+	ChainVersion       *string  `json:"chain_version,omitempty"`
 }
 
 func (s *Summary) URI() string {
