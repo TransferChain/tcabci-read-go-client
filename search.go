@@ -59,6 +59,7 @@ type Search struct {
 	MaxHeight          uint64         `json:"max_height"`
 	LastOrder          uint64         `json:"last_order"`
 	Type               Type           `json:"typ,omitempty"`
+	Types              []Type         `json:"types,omitempty"`
 	PHeight            string         `json:"height,omitempty"`
 	OrderBy            OrderBy        `json:"order_by,omitempty"`
 	OrderField         string         `json:"order_field,omitempty"`
@@ -97,6 +98,14 @@ func (s *Search) IsValid() bool {
 
 	if s.Type != "" && !s.Type.IsValid() {
 		return false
+	}
+
+	if len(s.Types) > 0 {
+		for i := 0; i < len(s.Types); i++ {
+			if !s.Types[i].IsValid() {
+				return false
+			}
+		}
 	}
 
 	if s.Limit > 100 {
