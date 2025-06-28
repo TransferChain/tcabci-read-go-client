@@ -46,6 +46,7 @@ const (
 	// Send pings to peer with this period. Must be less than pongWait.
 	pingPeriod       = (pongWait * 9) / 10
 	HandshakeTimeout = 5 * time.Second
+	writeTimeout     = 15 * time.Millisecond
 )
 
 type typ int
@@ -61,7 +62,7 @@ type Client interface {
 	Start() error
 	Stop() error
 	SetListenCallback(func(transaction *Transaction))
-	Subscribe(addresses []string, txTypes ...Type) error
+	Subscribe(addresses []string, signedDatas map[string]string, txTypes ...Type) error
 	Unsubscribe() error
 	Write(b []byte) error
 	LastBlock(chainName, chainVersion *string) (*LastBlock, error)
@@ -74,34 +75,35 @@ type Client interface {
 }
 
 type client struct {
-	ctx                 context.Context
-	mainCtx             context.Context
-	mainCtxCancel       context.CancelFunc
-	conn                *websocket.Conn
-	address             string
-	wsAddress           string
-	chainName           string
-	chainVersion        string
-	url                 *url.URL
-	wsURL               *url.URL
-	headers             http.Header
-	wsHeaders           http.Header
-	response            *http.Response
-	version             string
-	subscribed          bool
-	connected           bool
-	started             bool
-	handshakeTimeout    time.Duration
-	listenCallback      func(transaction *Transaction)
-	subscribedAddresses map[string]bool
-	listenCtx           context.Context
-	listenCtxCancel     context.CancelFunc
-	mut                 sync.RWMutex
-	sendBuf             chan sendMsg
-	pingTicker          *time.Ticker
-	dialer              *websocket.Dialer
-	receivedCh          chan Received
-	httpClient          *http.Client
+	ctx                   context.Context
+	mainCtx               context.Context
+	mainCtxCancel         context.CancelFunc
+	conn                  *websocket.Conn
+	address               string
+	wsAddress             string
+	chainName             string
+	chainVersion          string
+	url                   *url.URL
+	wsURL                 *url.URL
+	headers               http.Header
+	wsHeaders             http.Header
+	response              *http.Response
+	version               string
+	subscribed            bool
+	connected             bool
+	started               bool
+	handshakeTimeout      time.Duration
+	listenCallback        func(transaction *Transaction)
+	subscribedAddresses   map[string]bool
+	subscribedSignedDatas map[string]string
+	listenCtx             context.Context
+	listenCtxCancel       context.CancelFunc
+	mut                   sync.RWMutex
+	sendBuf               chan sendMsg
+	pingTicker            *time.Ticker
+	dialer                *websocket.Dialer
+	receivedCh            chan Received
+	httpClient            *http.Client
 }
 
 type sendMsg struct {
@@ -215,6 +217,16 @@ func (c *client) setSubscribedAddress(v map[string]bool) {
 	c.mut.Unlock()
 }
 
+func (c *client) getSubscribedSignedDatas() map[string]string {
+	return c.subscribedSignedDatas
+}
+
+func (c *client) setSubscribedSignedDatas(v map[string]string) {
+	c.mut.Lock()
+	c.subscribedSignedDatas = v
+	c.mut.Unlock()
+}
+
 // Start contexts and ws client and client retriever
 func (c *client) Start() error {
 	if c.getStarted() {
@@ -286,7 +298,7 @@ func (c *client) connect(reconnect bool) (*websocket.Conn, error) {
 			if err == nil {
 				if reconnect || (!currentState && c.getSubscribed()) {
 					_ = c.unsubscribe(false)
-					_ = c.subscribe(true, nil)
+					_ = c.subscribe(true, nil, nil)
 				}
 			} else {
 				continue
@@ -484,23 +496,33 @@ func (c *client) SetListenCallback(fn func(transaction *Transaction)) {
 }
 
 // Subscribe to given addresses
-func (c *client) Subscribe(addresses []string, txTypes ...Type) error {
-	return c.subscribe(false, addresses, txTypes...)
+func (c *client) Subscribe(addresses []string, signedDatas map[string]string, txTypes ...Type) error {
+	return c.subscribe(false, addresses, signedDatas, txTypes...)
 }
 
-func (c *client) subscribe(already bool, addresses []string, txTypes ...Type) error {
+func (c *client) subscribe(already bool, addresses []string, signedDatas map[string]string, txTypes ...Type) error {
 	if len(txTypes) > len(TypesSlice) {
 		return errors.New("invalid tx types")
 	}
 
 	tAddresses := make([]string, 0)
+	tSignedDatas := make(map[string]string)
 	subscribedAddress := c.getSubscribedAddress()
+	subscribedSignedDatas := c.getSubscribedSignedDatas()
 	if already {
 		if len(subscribedAddress) <= 0 {
 			return nil
 		}
 		for address := range subscribedAddress {
 			tAddresses = append(tAddresses, address)
+		}
+
+		if len(subscribedSignedDatas) == 0 {
+			return nil
+		}
+
+		for kk, vv := range subscribedSignedDatas {
+			tSignedDatas[kk] = vv
 		}
 	} else {
 		if len(addresses) == 0 {
@@ -519,17 +541,20 @@ func (c *client) subscribe(already bool, addresses []string, txTypes ...Type) er
 
 			tAddresses = newAddress
 		}
+
+		tSignedDatas = subscribedSignedDatas
 	}
 
-	if len(tAddresses) == 0 {
+	if len(tAddresses) == 0 || len(tSignedDatas) == 0 {
 		return nil
 	}
 
 	subscribeMessage := Message{
-		IsWeb:   false,
-		Type:    Subscribe,
-		Addrs:   tAddresses,
-		TXTypes: txTypes,
+		IsWeb:       false,
+		Type:        Subscribe,
+		Addrs:       tAddresses,
+		SignedAddrs: tSignedDatas,
+		TXTypes:     txTypes,
 	}
 
 	b, err := json.Marshal(subscribeMessage)
@@ -537,19 +562,36 @@ func (c *client) subscribe(already bool, addresses []string, txTypes ...Type) er
 		return err
 	}
 
-	go func() {
-		c.sendBuf <- sendMsg{
+	//go func() {
+	//	c.sendBuf <- sendMsg{
+	//		typ:        message,
+	//		messageTyp: websocket.TextMessage,
+	//		msg:        b,
+	//	}
+	//}()
+
+	cctx, cancel := context.WithTimeout(c.mainCtx, writeTimeout+1)
+	defer cancel()
+	go func(err *error) {
+		if err2 := c.write(sendMsg{
 			typ:        message,
 			messageTyp: websocket.TextMessage,
 			msg:        b,
+		}); err2 != nil {
+			*err = err2
 		}
-	}()
+	}(&err)
+	<-cctx.Done()
+	if err != nil {
+		return err
+	}
 
 	tmp := make(map[string]bool)
 	for i := 0; i < len(tAddresses); i++ {
 		tmp[tAddresses[i]] = true
 	}
 	c.setSubscribedAddress(tmp)
+	c.setSubscribedSignedDatas(tSignedDatas)
 	c.setSubscribed(true)
 
 	return nil
