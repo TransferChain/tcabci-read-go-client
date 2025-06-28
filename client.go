@@ -143,7 +143,7 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 
 	c := &client{
 		ctx:                 ctx,
-		version:             "v1.4.2",
+		version:             "v1.4.3",
 		address:             address,
 		wsAddress:           wsAddress,
 		chainName:           chainName,
@@ -247,11 +247,9 @@ func (c *client) Start() error {
 	go func() {
 		_, _ = c.connect(false)
 	}()
-	time.AfterFunc(c.handshakeTimeout, func() {
-		go c.listen()
-		go c.listenWrite()
-		go c.ping()
-	})
+	go c.listen()
+	go c.listenWrite()
+	go c.ping()
 
 	return nil
 }
