@@ -46,6 +46,7 @@ const (
 	// Send pings to peer with this period. Must be less than pongWait.
 	pingPeriod       = (pongWait * 9) / 10
 	HandshakeTimeout = 5 * time.Second
+	writeTimeout     = 15 * time.Millisecond
 )
 
 type typ int
@@ -61,7 +62,7 @@ type Client interface {
 	Start() error
 	Stop() error
 	SetListenCallback(func(transaction *Transaction))
-	Subscribe(addresses []string, txTypes ...Type) error
+	Subscribe(addresses []string, signedDatas map[string]string, txTypes ...Type) error
 	Unsubscribe() error
 	Write(b []byte) error
 	LastBlock(chainName, chainVersion *string) (*LastBlock, error)
@@ -69,37 +70,40 @@ type Client interface {
 	TxSummary(summary *Summary) (lastBlockHeight uint64, lastTransaction *Transaction, totalCount uint64, err error)
 	TxSearch(search *Search) (txs []*Transaction, totalCount uint64, err error)
 	Broadcast(id string, version uint32, typ Type, data []byte, senderAddress, recipientAddress string, sign []byte, fee uint64) (*BroadcastResponse, error)
+	BroadcastSync(id string, version uint32, typ Type, data []byte, senderAddress, recipientAddress string, sign []byte, fee uint64) (*BroadcastResponse, error)
+	BroadcastCommit(id string, version uint32, typ Type, data []byte, senderAddress, recipientAddress string, sign []byte, fee uint64) (*BroadcastResponse, error)
 }
 
 type client struct {
-	ctx                 context.Context
-	mainCtx             context.Context
-	mainCtxCancel       context.CancelFunc
-	conn                *websocket.Conn
-	address             string
-	wsAddress           string
-	chainName           string
-	chainVersion        string
-	url                 *url.URL
-	wsURL               *url.URL
-	headers             http.Header
-	wsHeaders           http.Header
-	response            *http.Response
-	version             string
-	subscribed          bool
-	connected           bool
-	started             bool
-	handshakeTimeout    time.Duration
-	listenCallback      func(transaction *Transaction)
-	subscribedAddresses map[string]bool
-	listenCtx           context.Context
-	listenCtxCancel     context.CancelFunc
-	mut                 sync.RWMutex
-	sendBuf             chan sendMsg
-	pingTicker          *time.Ticker
-	dialer              *websocket.Dialer
-	receivedCh          chan Received
-	httpClient          *http.Client
+	ctx                   context.Context
+	mainCtx               context.Context
+	mainCtxCancel         context.CancelFunc
+	conn                  *websocket.Conn
+	address               string
+	wsAddress             string
+	chainName             string
+	chainVersion          string
+	url                   *url.URL
+	wsURL                 *url.URL
+	headers               http.Header
+	wsHeaders             http.Header
+	response              *http.Response
+	version               string
+	subscribed            bool
+	connected             bool
+	started               bool
+	handshakeTimeout      time.Duration
+	listenCallback        func(transaction *Transaction)
+	subscribedAddresses   map[string]bool
+	subscribedSignedDatas map[string]string
+	listenCtx             context.Context
+	listenCtxCancel       context.CancelFunc
+	mut                   sync.RWMutex
+	sendBuf               chan sendMsg
+	pingTicker            *time.Ticker
+	dialer                *websocket.Dialer
+	receivedCh            chan Received
+	httpClient            *http.Client
 }
 
 type sendMsg struct {
@@ -139,7 +143,7 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 
 	c := &client{
 		ctx:                 ctx,
-		version:             "v1.3.2",
+		version:             "v1.4.0",
 		address:             address,
 		wsAddress:           wsAddress,
 		chainName:           chainName,
@@ -161,10 +165,12 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 		receivedCh: make(chan Received, runtime.NumCPU()),
 		httpClient: http.DefaultClient,
 	}
-	c.httpClient.Timeout = 10 * time.Second
+	c.httpClient.Timeout = 7 * time.Second
 
 	c.headers.Set("Client", fmt.Sprintf("tcabaci-read-go-client-%s", c.version))
+	c.headers.Set("User-Agent", fmt.Sprintf("tcabaci-read-go-client-%s", c.version))
 	c.wsHeaders.Set("Client", fmt.Sprintf("tcabaci-read-go-client-%s", c.version))
+	c.wsHeaders.Set("User-Agent", fmt.Sprintf("tcabaci-read-go-client-%s", c.version))
 
 	return c, nil
 }
@@ -210,6 +216,16 @@ func (c *client) getSubscribedAddress() map[string]bool {
 func (c *client) setSubscribedAddress(v map[string]bool) {
 	c.mut.Lock()
 	c.subscribedAddresses = v
+	c.mut.Unlock()
+}
+
+func (c *client) getSubscribedSignedDatas() map[string]string {
+	return c.subscribedSignedDatas
+}
+
+func (c *client) setSubscribedSignedDatas(v map[string]string) {
+	c.mut.Lock()
+	c.subscribedSignedDatas = v
 	c.mut.Unlock()
 }
 
@@ -284,7 +300,7 @@ func (c *client) connect(reconnect bool) (*websocket.Conn, error) {
 			if err == nil {
 				if reconnect || (!currentState && c.getSubscribed()) {
 					_ = c.unsubscribe(false)
-					_ = c.subscribe(true, nil)
+					_ = c.subscribe(true, nil, nil)
 				}
 			} else {
 				continue
@@ -482,23 +498,33 @@ func (c *client) SetListenCallback(fn func(transaction *Transaction)) {
 }
 
 // Subscribe to given addresses
-func (c *client) Subscribe(addresses []string, txTypes ...Type) error {
-	return c.subscribe(false, addresses, txTypes...)
+func (c *client) Subscribe(addresses []string, signedDatas map[string]string, txTypes ...Type) error {
+	return c.subscribe(false, addresses, signedDatas, txTypes...)
 }
 
-func (c *client) subscribe(already bool, addresses []string, txTypes ...Type) error {
+func (c *client) subscribe(already bool, addresses []string, signedDatas map[string]string, txTypes ...Type) error {
 	if len(txTypes) > len(TypesSlice) {
 		return errors.New("invalid tx types")
 	}
 
 	tAddresses := make([]string, 0)
+	tSignedDatas := make(map[string]string)
 	subscribedAddress := c.getSubscribedAddress()
+	subscribedSignedDatas := c.getSubscribedSignedDatas()
 	if already {
 		if len(subscribedAddress) <= 0 {
 			return nil
 		}
 		for address := range subscribedAddress {
 			tAddresses = append(tAddresses, address)
+		}
+
+		if len(subscribedSignedDatas) == 0 {
+			return nil
+		}
+
+		for kk, vv := range subscribedSignedDatas {
+			tSignedDatas[kk] = vv
 		}
 	} else {
 		if len(addresses) == 0 {
@@ -517,17 +543,20 @@ func (c *client) subscribe(already bool, addresses []string, txTypes ...Type) er
 
 			tAddresses = newAddress
 		}
+
+		tSignedDatas = subscribedSignedDatas
 	}
 
-	if len(tAddresses) == 0 {
+	if len(tAddresses) == 0 || len(tSignedDatas) == 0 {
 		return nil
 	}
 
 	subscribeMessage := Message{
-		IsWeb:   false,
-		Type:    Subscribe,
-		Addrs:   tAddresses,
-		TXTypes: txTypes,
+		IsWeb:       false,
+		Type:        Subscribe,
+		Addrs:       tAddresses,
+		SignedAddrs: tSignedDatas,
+		TXTypes:     txTypes,
 	}
 
 	b, err := json.Marshal(subscribeMessage)
@@ -535,19 +564,36 @@ func (c *client) subscribe(already bool, addresses []string, txTypes ...Type) er
 		return err
 	}
 
-	go func() {
-		c.sendBuf <- sendMsg{
+	//go func() {
+	//	c.sendBuf <- sendMsg{
+	//		typ:        message,
+	//		messageTyp: websocket.TextMessage,
+	//		msg:        b,
+	//	}
+	//}()
+
+	cctx, cancel := context.WithTimeout(c.mainCtx, writeTimeout+1)
+	defer cancel()
+	go func(err *error) {
+		if err2 := c.write(sendMsg{
 			typ:        message,
 			messageTyp: websocket.TextMessage,
 			msg:        b,
+		}); err2 != nil {
+			*err = err2
 		}
-	}()
+	}(&err)
+	<-cctx.Done()
+	if err != nil {
+		return err
+	}
 
 	tmp := make(map[string]bool)
 	for i := 0; i < len(tAddresses); i++ {
 		tmp[tAddresses[i]] = true
 	}
 	c.setSubscribedAddress(tmp)
+	c.setSubscribedSignedDatas(tSignedDatas)
 	c.setSubscribed(true)
 
 	return nil
@@ -605,7 +651,16 @@ func (c *client) LastBlock(chainName, chainVersion *string) (*LastBlock, error) 
 	} else {
 		uri += "&chain_name=" + c.chainName + "&chain_version=" + c.chainVersion
 	}
-	resp, err := c.httpClient.Get(uri)
+
+	req, err := http.NewRequestWithContext(c.ctx, http.MethodGet, uri, http.NoBody)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header = c.headers
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -642,7 +697,15 @@ func (c *client) Tx(id string, chainName, chainVersion *string) (*Transaction, e
 		uri += "?chain_name=" + c.chainName + "&chain_version=" + c.chainVersion
 	}
 
-	resp, err := c.httpClient.Get(uri)
+	req, err := http.NewRequestWithContext(c.ctx, http.MethodGet, uri, http.NoBody)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header = c.headers
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -688,6 +751,9 @@ func (c *client) TxSummary(summary *Summary) (lastBlockHeight uint64, lastTransa
 	if err != nil {
 		return 0, nil, 0, err
 	}
+
+	req.Header = c.headers
+	req.Header.Set("Content-Type", "application/json")
 
 	req.URL, _ = url.Parse(c.address + summary.URI())
 
@@ -744,6 +810,9 @@ func (c *client) TxSearch(search *Search) (txs []*Transaction, totalCount uint64
 	if err != nil {
 		return nil, 0, err
 	}
+
+	req.Header = c.headers
+	req.Header.Set("Content-Type", "application/json")
 
 	req.URL, _ = url.Parse(c.address + search.URI())
 
@@ -824,6 +893,9 @@ func (c *client) broadcast(id string, version uint32, typ Type, data []byte, sen
 	if err != nil {
 		return nil, err
 	}
+
+	req.Header = c.headers
+	req.Header.Set("Content-Type", "application/json")
 
 	req.URL, _ = url.Parse(c.address + broadcast.URI(commit, sync))
 
