@@ -544,7 +544,7 @@ func (c *client) subscribe(already bool, addresses []string, signedDatas map[str
 			tAddresses = newAddress
 		}
 
-		tSignedDatas = subscribedSignedDatas
+		tSignedDatas = signedDatas
 	}
 
 	if len(tAddresses) == 0 || len(tSignedDatas) == 0 {
