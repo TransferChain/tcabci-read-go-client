@@ -45,7 +45,7 @@ const (
 	pongWait = 10 * time.Second
 	// Send pings to peer with this period. Must be less than pongWait.
 	pingPeriod       = (pongWait * 9) / 10
-	HandshakeTimeout = 5 * time.Second
+	HandshakeTimeout = 7 * time.Second
 	writeTimeout     = 15 * time.Millisecond
 )
 
@@ -237,7 +237,8 @@ func (c *client) Start() error {
 	c.mut.Lock()
 	c.mainCtx, c.mainCtxCancel = context.WithCancel(c.ctx)
 	c.listenCtx, c.listenCtxCancel = context.WithCancel(c.mainCtx)
-	c.sendBuf = make(chan sendMsg)
+	c.sendBuf = make(chan sendMsg, runtime.NumCPU())
+	c.receivedCh = make(chan Received, runtime.NumCPU())
 	c.pingTicker = time.NewTicker(pingPeriod)
 	c.mut.Unlock()
 	c.setStarted(true)
@@ -564,29 +565,13 @@ func (c *client) subscribe(already bool, addresses []string, signedDatas map[str
 		return err
 	}
 
-	//go func() {
-	//	c.sendBuf <- sendMsg{
-	//		typ:        message,
-	//		messageTyp: websocket.TextMessage,
-	//		msg:        b,
-	//	}
-	//}()
-
-	cctx, cancel := context.WithTimeout(c.mainCtx, writeTimeout+1)
-	defer cancel()
-	go func(err *error) {
-		if err2 := c.write(sendMsg{
+	go func() {
+		c.sendBuf <- sendMsg{
 			typ:        message,
 			messageTyp: websocket.TextMessage,
 			msg:        b,
-		}); err2 != nil {
-			*err = err2
 		}
-	}(&err)
-	<-cctx.Done()
-	if err != nil {
-		return err
-	}
+	}()
 
 	tmp := make(map[string]bool)
 	for i := 0; i < len(tAddresses); i++ {
