@@ -165,10 +165,12 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 		receivedCh: make(chan Received, runtime.NumCPU()),
 		httpClient: http.DefaultClient,
 	}
-	c.httpClient.Timeout = 10 * time.Second
+	c.httpClient.Timeout = 7 * time.Second
 
 	c.headers.Set("Client", fmt.Sprintf("tcabaci-read-go-client-%s", c.version))
+	c.headers.Set("User-Agent", fmt.Sprintf("tcabaci-read-go-client-%s", c.version))
 	c.wsHeaders.Set("Client", fmt.Sprintf("tcabaci-read-go-client-%s", c.version))
+	c.wsHeaders.Set("User-Agent", fmt.Sprintf("tcabaci-read-go-client-%s", c.version))
 
 	return c, nil
 }
@@ -649,7 +651,16 @@ func (c *client) LastBlock(chainName, chainVersion *string) (*LastBlock, error) 
 	} else {
 		uri += "&chain_name=" + c.chainName + "&chain_version=" + c.chainVersion
 	}
-	resp, err := c.httpClient.Get(uri)
+
+	req, err := http.NewRequestWithContext(c.ctx, http.MethodGet, uri, http.NoBody)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header = c.headers
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -686,7 +697,15 @@ func (c *client) Tx(id string, chainName, chainVersion *string) (*Transaction, e
 		uri += "?chain_name=" + c.chainName + "&chain_version=" + c.chainVersion
 	}
 
-	resp, err := c.httpClient.Get(uri)
+	req, err := http.NewRequestWithContext(c.ctx, http.MethodGet, uri, http.NoBody)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header = c.headers
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -732,6 +751,9 @@ func (c *client) TxSummary(summary *Summary) (lastBlockHeight uint64, lastTransa
 	if err != nil {
 		return 0, nil, 0, err
 	}
+
+	req.Header = c.headers
+	req.Header.Set("Content-Type", "application/json")
 
 	req.URL, _ = url.Parse(c.address + summary.URI())
 
@@ -788,6 +810,9 @@ func (c *client) TxSearch(search *Search) (txs []*Transaction, totalCount uint64
 	if err != nil {
 		return nil, 0, err
 	}
+
+	req.Header = c.headers
+	req.Header.Set("Content-Type", "application/json")
 
 	req.URL, _ = url.Parse(c.address + search.URI())
 
@@ -868,6 +893,9 @@ func (c *client) broadcast(id string, version uint32, typ Type, data []byte, sen
 	if err != nil {
 		return nil, err
 	}
+
+	req.Header = c.headers
+	req.Header.Set("Content-Type", "application/json")
 
 	req.URL, _ = url.Parse(c.address + broadcast.URI(commit, sync))
 
