@@ -3,6 +3,8 @@ package tcabcireadgoclient
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"github.com/stretchr/testify/assert"
 	"math/big"
@@ -40,14 +42,26 @@ func newTestClient(b *testing.B, n int) {
 	}
 	readNodeClient.SetListenCallback(fn)
 
-	addrs := make([]string, n)
-	for i := 0; i < n; i++ {
-		addrs = append(addrs, randomString(88))
+	signedDatas := make(map[string]string)
+	addrs := make([]string, 251)
+	for i := 0; i < 251; i++ {
+		_, signKey, adr, err := KeyFillFromSeed(sha256.Sum256([]byte(randomString(88))))
+		assert.Nil(b, err)
+		if err != nil {
+			break
+		}
+		data := sha256.Sum256([]byte(randomString(32)))
+		signed := Sign(signKey, data[:])
+		signedDatas[adr] = hex.EncodeToString(data[:]) + ";" + hex.EncodeToString(signed[:])
+
+		addrs = append(addrs, adr)
+
 	}
 	err = readNodeClient.Start()
 	assert.Nil(b, err)
 	time.Sleep(time.Second * 1)
-	err = readNodeClient.Subscribe(addrs)
+
+	err = readNodeClient.Subscribe(addrs, signedDatas)
 	assert.Nil(b, err)
 
 	//<-done
@@ -67,13 +81,24 @@ func newTestClientWithoutStop(t *testing.T) Client {
 	}
 	readNodeClient.SetListenCallback(fn)
 
+	signedDatas := make(map[string]string)
 	addrs := make([]string, 251)
 	for i := 0; i < 251; i++ {
-		addrs = append(addrs, randomString(88))
+		_, signKey, adr, err := KeyFillFromSeed(sha256.Sum256([]byte(randomString(88))))
+		assert.Nil(t, err)
+		if err != nil {
+			break
+		}
+		data := sha256.Sum256([]byte(randomString(32)))
+		signed := Sign(signKey, data[:])
+		signedDatas[adr] = hex.EncodeToString(data[:]) + ";" + hex.EncodeToString(signed[:])
+
+		addrs = append(addrs, adr)
+
 	}
 	err = readNodeClient.Start()
 	assert.Nil(t, err)
-	err = readNodeClient.Subscribe(addrs)
+	err = readNodeClient.Subscribe(addrs, signedDatas)
 	assert.Nil(t, err)
 
 	return readNodeClient
@@ -118,13 +143,25 @@ func TestNewClientContext(t *testing.T) {
 	}
 	readNodeClient.SetListenCallback(fn)
 
-	addrs := []string{
-		randomString(88),
+	signedDatas := make(map[string]string)
+	addrs := make([]string, 251)
+	for i := 0; i < 251; i++ {
+		_, signKey, adr, err := KeyFillFromSeed(sha256.Sum256([]byte(randomString(88))))
+		assert.Nil(t, err)
+		if err != nil {
+			break
+		}
+		data := sha256.Sum256([]byte(randomString(32)))
+		signed := Sign(signKey, data[:])
+		signedDatas[adr] = hex.EncodeToString(data[:]) + ";" + hex.EncodeToString(signed[:])
+
+		addrs = append(addrs, adr)
+
 	}
 	err = readNodeClient.Start()
 	assert.Nil(t, err)
 	time.Sleep(time.Second * 1)
-	err = readNodeClient.Subscribe(addrs)
+	err = readNodeClient.Subscribe(addrs, signedDatas)
 	assert.Nil(t, err)
 
 	//<-done
