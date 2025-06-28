@@ -247,11 +247,9 @@ func (c *client) Start() error {
 	go func() {
 		_, _ = c.connect(false)
 	}()
-	time.AfterFunc(c.handshakeTimeout, func() {
-		go c.listen()
-		go c.listenWrite()
-		go c.ping()
-	})
+	go c.listen()
+	go c.listenWrite()
+	go c.ping()
 
 	return nil
 }
