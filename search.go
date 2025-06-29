@@ -53,22 +53,23 @@ const (
 )
 
 type Search struct {
-	Limit              uint           `json:"limit"`
-	Height             uint64         `json:"-"`
-	Offset             uint64         `json:"offset"`
-	MaxHeight          uint64         `json:"max_height"`
-	LastOrder          uint64         `json:"last_order"`
-	Type               Type           `json:"typ,omitempty"`
-	Types              []Type         `json:"types,omitempty"`
-	PHeight            string         `json:"height,omitempty"`
-	OrderBy            OrderBy        `json:"order_by,omitempty"`
-	OrderField         string         `json:"order_field,omitempty"`
-	HeightOperator     HeightOperator `json:"-"`
-	RecipientAddresses []string       `json:"recipient_addrs,omitempty"`
-	SenderAddresses    []string       `json:"sender_addrs,omitempty"`
-	Hashes             []string       `json:"hashes,omitempty"`
-	ChainName          *string        `json:"chain_name,omitempty"`
-	ChainVersion       *string        `json:"chain_version,omitempty"`
+	Limit              uint              `json:"limit"`
+	Height             uint64            `json:"-"`
+	Offset             uint64            `json:"offset"`
+	MaxHeight          uint64            `json:"max_height"`
+	LastOrder          uint64            `json:"last_order"`
+	Type               Type              `json:"typ,omitempty"`
+	Types              []Type            `json:"types,omitempty"`
+	PHeight            string            `json:"height,omitempty"`
+	OrderBy            OrderBy           `json:"order_by,omitempty"`
+	OrderField         string            `json:"order_field,omitempty"`
+	HeightOperator     HeightOperator    `json:"-"`
+	RecipientAddresses []string          `json:"recipient_addrs,omitempty"`
+	SenderAddresses    []string          `json:"sender_addrs,omitempty"`
+	SignedAddresses    map[string]string `json:"signed_addrs,omitempty"`
+	Hashes             []string          `json:"hashes,omitempty"`
+	ChainName          *string           `json:"chain_name,omitempty"`
+	ChainVersion       *string           `json:"chain_version,omitempty"`
 }
 
 func (s *Search) URI() string {
@@ -84,11 +85,23 @@ func (s *Search) IsValid() bool {
 		return false
 	}
 
+	if len(s.SignedAddresses) == 0 {
+		return false
+	}
+
 	if len(s.RecipientAddresses) > 251 {
 		return false
 	}
 
 	if len(s.SenderAddresses) > 251 {
+		return false
+	}
+
+	if len(s.RecipientAddresses) > 0 && len(s.SignedAddresses) != len(s.RecipientAddresses) {
+		return false
+	}
+
+	if len(s.SenderAddresses) > 0 && len(s.SignedAddresses) != len(s.SenderAddresses) {
 		return false
 	}
 
