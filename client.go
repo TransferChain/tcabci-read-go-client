@@ -66,7 +66,7 @@ type Client interface {
 	Unsubscribe() error
 	Write(b []byte) error
 	LastBlock(chainName, chainVersion *string) (*LastBlock, error)
-	Tx(id string, chainName, chainVersion *string) (*Transaction, error)
+	Tx(id string, signature string, chainName, chainVersion *string) (*Transaction, error)
 	TxSummary(summary *Summary) (lastBlockHeight uint64, lastTransaction *Transaction, totalCount uint64, err error)
 	TxSearch(search *Search) (txs []*Transaction, totalCount uint64, err error)
 	Broadcast(id string, version uint32, typ Type, data []byte, senderAddress, recipientAddress string, sign []byte, fee uint64) (*BroadcastResponse, error)
@@ -143,7 +143,7 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 
 	c := &client{
 		ctx:                 ctx,
-		version:             "v1.4.3",
+		version:             "v1.5.0",
 		address:             address,
 		wsAddress:           wsAddress,
 		chainName:           chainName,
@@ -665,7 +665,7 @@ func (c *client) LastBlock(chainName, chainVersion *string) (*LastBlock, error) 
 	return &lastBlock, nil
 }
 
-func (c *client) Tx(id string, chainName, chainVersion *string) (*Transaction, error) {
+func (c *client) Tx(id string, signature string, chainName, chainVersion *string) (*Transaction, error) {
 	if id == "" {
 		return nil, errors.New("invalid tx id")
 	}
@@ -687,6 +687,7 @@ func (c *client) Tx(id string, chainName, chainVersion *string) (*Transaction, e
 
 	req.Header = c.headers
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Signature", signature)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
