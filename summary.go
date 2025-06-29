@@ -7,11 +7,12 @@ import (
 )
 
 type Summary struct {
-	RecipientAddresses []string `json:"recipient_addrs,omitempty"`
-	SenderAddresses    []string `json:"sender_addrs,omitempty"`
-	Type               Type     `json:"typ,omitempty"`
-	ChainName          *string  `json:"chain_name,omitempty"`
-	ChainVersion       *string  `json:"chain_version,omitempty"`
+	RecipientAddresses []string          `json:"recipient_addrs,omitempty"`
+	SenderAddresses    []string          `json:"sender_addrs,omitempty"`
+	Type               Type              `json:"typ,omitempty"`
+	ChainName          *string           `json:"chain_name,omitempty"`
+	ChainVersion       *string           `json:"chain_version,omitempty"`
+	SignedAddrs        map[string]string `json:"signed_addrs,omitempty"`
 }
 
 func (s *Summary) URI() string {
@@ -24,6 +25,14 @@ func (s *Summary) IsValid() bool {
 	}
 
 	if len(s.SenderAddresses) > 251 {
+		return false
+	}
+
+	if len(s.RecipientAddresses) > 0 && len(s.RecipientAddresses) != len(s.SignedAddrs) {
+		return false
+	}
+
+	if len(s.SenderAddresses) > 0 && len(s.SenderAddresses) != len(s.SignedAddrs) {
 		return false
 	}
 
