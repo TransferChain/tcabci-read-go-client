@@ -18,11 +18,11 @@ package tcabcireadgoclient
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/fasthttp/websocket"
-	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -30,6 +30,9 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/fasthttp/websocket"
+	"github.com/valyala/fasthttp"
 )
 
 // ErrNoConnected ...
@@ -59,6 +62,8 @@ const (
 
 // Client TCABCI Read Node Websocket Client
 type Client interface {
+	SetLogger(l Logger) Client
+	SetVerbose(verbose bool) (Client, error)
 	Start() error
 	Stop() error
 	SetListenCallback(func(transaction *Transaction))
@@ -79,15 +84,16 @@ type client struct {
 	mainCtx               context.Context
 	mainCtxCancel         context.CancelFunc
 	conn                  *websocket.Conn
+	lgr                   Logger
+	verbose               bool
 	address               string
 	wsAddress             string
 	chainName             string
 	chainVersion          string
 	url                   *url.URL
 	wsURL                 *url.URL
-	headers               http.Header
-	wsHeaders             http.Header
-	response              *http.Response
+	headers               fasthttp.RequestHeader
+	wsHeaders             fasthttp.RequestHeader
 	version               string
 	subscribed            bool
 	connected             bool
@@ -103,7 +109,7 @@ type client struct {
 	pingTicker            *time.Ticker
 	dialer                *websocket.Dialer
 	receivedCh            chan Received
-	httpClient            *http.Client
+	httpClient            *fasthttp.Client
 }
 
 type sendMsg struct {
@@ -141,31 +147,46 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 		return nil, errors.New("invalid websocket address")
 	}
 
+	pool, err := x509.SystemCertPool()
+	if err != nil {
+		return nil, err
+	}
+
 	c := &client{
 		ctx:                 ctx,
 		version:             "v1.5.0",
+		lgr:                 NewLogger(ctx),
 		address:             address,
 		wsAddress:           wsAddress,
 		chainName:           chainName,
 		chainVersion:        chainVersion,
 		url:                 aURL,
 		wsURL:               wsURL,
-		headers:             make(http.Header),
-		wsHeaders:           make(http.Header),
 		subscribedAddresses: make(map[string]bool),
 		handshakeTimeout:    HandshakeTimeout,
 		dialer: &websocket.Dialer{
-			Proxy:             http.ProxyFromEnvironment,
+			TLSClientConfig: &tls.Config{
+				RootCAs:               pool,
+				InsecureSkipVerify:    false,
+				VerifyPeerCertificate: verifyPeer,
+			},
 			HandshakeTimeout:  HandshakeTimeout,
-			ReadBufferSize:    2 * 1024 * 1024,
-			WriteBufferSize:   2 * 1024 * 1024,
+			ReadBufferSize:    5 * 1024 * 1024,
+			WriteBufferSize:   5 * 1024 * 1024,
 			EnableCompression: true,
 		},
 		sendBuf:    make(chan sendMsg, runtime.NumCPU()),
 		receivedCh: make(chan Received, runtime.NumCPU()),
-		httpClient: http.DefaultClient,
+		httpClient: &fasthttp.Client{},
 	}
-	c.httpClient.Timeout = 7 * time.Second
+	trn, err := newTransport(pool, false)
+	if err != nil {
+		return nil, err
+	}
+
+	c.httpClient.Transport = trn
+	c.httpClient.WriteTimeout = 7 * time.Second
+	c.httpClient.ReadTimeout = 7 * time.Second
 
 	c.headers.Set("Client", fmt.Sprintf("tcabaci-read-go-client-%s", c.version))
 	c.headers.Set("User-Agent", fmt.Sprintf("tcabaci-read-go-client-%s", c.version))
@@ -173,6 +194,11 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 	c.wsHeaders.Set("User-Agent", fmt.Sprintf("tcabaci-read-go-client-%s", c.version))
 
 	return c, nil
+}
+
+func (c *client) parsedAddr() []string {
+	uri, _ := url.Parse(c.address)
+	return []string{uri.Scheme, uri.Host}
 }
 
 func (c *client) setStarted(b bool) {
@@ -227,6 +253,29 @@ func (c *client) setSubscribedSignedDatas(v map[string]string) {
 	c.mut.Lock()
 	c.subscribedSignedDatas = v
 	c.mut.Unlock()
+}
+
+func (c *client) SetLogger(l Logger) Client {
+	c.lgr = l
+
+	return c
+}
+
+func (c *client) SetVerbose(v bool) (Client, error) {
+	c.verbose = v
+
+	pool, err := x509.SystemCertPool()
+	if err != nil {
+		return nil, err
+	}
+	
+	trn, err := newTransport(pool, v)
+	if err != nil {
+		return nil, err
+	}
+	c.httpClient.Transport = trn
+
+	return c, nil
 }
 
 // Start contexts and ws client and client retriever
@@ -287,13 +336,20 @@ func (c *client) connect(reconnect bool) (*websocket.Conn, error) {
 			return nil, errors.New("main context canceled")
 		default:
 			currentState := c.isConnected()
-			conn, response, err := c.dialer.DialContext(c.ctx, c.wsURL.String(),
-				c.wsHeaders)
-
+			headers := http.Header{}
+			for kk, vv := range c.wsHeaders.All() {
+				for _, v := range vv {
+					headers.Add(string(kk), strconv.Itoa(int(v)))
+				}
+			}
+			conn, response, err := c.dialer.DialContext(c.ctx, c.wsURL.String(), headers)
 			c.mut.Lock()
 			c.conn = conn
-			c.response = response
 			c.connected = err == nil
+			if response.StatusCode >= 400 {
+				c.connected = false
+				err = errors.New(response.Status)
+			}
 			c.mut.Unlock()
 
 			if err == nil {
@@ -302,6 +358,7 @@ func (c *client) connect(reconnect bool) (*websocket.Conn, error) {
 					_ = c.subscribe(true, nil, nil)
 				}
 			} else {
+				c.lgr.Error(err)
 				continue
 			}
 
@@ -325,6 +382,7 @@ func (c *client) readMessage() <-chan Received {
 			return
 		}
 		if err != nil {
+			c.lgr.Error(err)
 			c.closeWS()
 		}
 		c.receivedCh <- Received{
@@ -359,6 +417,7 @@ func (c *client) write(sm sendMsg) (err error) {
 			writing = false
 		case <-ctx.Done():
 			err = errors.New("context deadline exceeded")
+			c.lgr.Error(err)
 			writing = false
 		}
 	}
@@ -382,11 +441,17 @@ func (c *client) listenWrite() {
 			c.mut.Lock()
 			err = conn.WriteControl(buf.messageTyp, buf.msg, time.Now().Add(pingPeriod/2))
 			c.mut.Unlock()
+			if err != nil {
+				c.lgr.Error(err)
+			}
 			break
 		case message, mclose:
 			c.mut.Lock()
 			err = conn.WriteMessage(buf.messageTyp, buf.msg)
 			c.mut.Unlock()
+			if err != nil {
+				c.lgr.Error(err)
+			}
 			break
 		default:
 			err = nil
@@ -414,6 +479,10 @@ func (c *client) listen() {
 			listening = false
 			break
 		case received := <-c.readMessage():
+			if received.Err != nil {
+				c.lgr.Error(received.Err)
+			}
+
 			if websocket.IsCloseError(received.Err, websocket.CloseNormalClosure) {
 				listening = false
 				return
@@ -426,14 +495,14 @@ func (c *client) listen() {
 			if c.listenCallback != nil {
 				switch received.MessageType {
 				case websocket.TextMessage:
-					if json.Valid(received.ReadingMessage) {
-						var transaction Transaction
-						if err := json.Unmarshal(received.ReadingMessage, &transaction); err == nil {
-							c.listenCallback(&transaction)
-						}
-					} else {
-						//
-						//
+					if !json.Valid(received.ReadingMessage) {
+						continue
+					}
+
+					var transaction Transaction
+					if err := json.Unmarshal(received.ReadingMessage, &transaction); err == nil {
+						c.lgr.Error(err)
+						c.listenCallback(&transaction)
 					}
 				}
 			}
@@ -449,6 +518,7 @@ func (c *client) ping() {
 			if !c.isConnected() {
 				_, err := c.connect(false)
 				if err != nil {
+					c.lgr.Error(err)
 					continue
 				}
 			} else {
@@ -457,6 +527,8 @@ func (c *client) ping() {
 					messageTyp: websocket.PingMessage,
 					msg:        []byte{},
 				}); err != nil {
+					c.lgr.Error(err)
+
 					if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
 						_ = c.Stop()
 						writing = false
@@ -479,12 +551,16 @@ func (c *client) ping() {
 
 func (c *client) closeWS() {
 	if conn := c.getConn(); conn != nil {
-		_ = c.write(sendMsg{
+		if err := c.write(sendMsg{
 			typ:        mclose,
 			messageTyp: websocket.CloseMessage,
 			msg:        websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
-		})
-		_ = conn.Close()
+		}); err != nil {
+			c.lgr.Error(err)
+		}
+		if err := conn.Close(); err != nil {
+			c.lgr.Error(err)
+		}
 	}
 	c.connected = false
 	c.conn = nil
@@ -560,6 +636,7 @@ func (c *client) subscribe(already bool, addresses []string, signedDatas map[str
 
 	b, err := json.Marshal(subscribeMessage)
 	if err != nil {
+		c.lgr.Error(err)
 		return err
 	}
 
@@ -610,6 +687,7 @@ func (c *client) unsubscribe(_ bool) error {
 
 	b, err := json.Marshal(unsubscribeMessage)
 	if err != nil {
+		c.lgr.Error(err)
 		return err
 	}
 
@@ -628,37 +706,51 @@ func (c *client) unsubscribe(_ bool) error {
 func (c *client) LastBlock(chainName, chainVersion *string) (*LastBlock, error) {
 	var lastBlock LastBlock
 
-	uri := c.address + "/v1/blocks?limit=1&offset=0"
+	u := "limit=1&offset=0"
 	if chainName != nil && chainVersion != nil {
-		uri += "&chain_name=" + *chainName + "&chain_version=" + *chainVersion
+		u += "&chain_name=" + *chainName + "&chain_version=" + *chainVersion
 	} else {
-		uri += "&chain_name=" + c.chainName + "&chain_version=" + c.chainVersion
+		u += "&chain_name=" + c.chainName + "&chain_version=" + c.chainVersion
 	}
 
-	req, err := http.NewRequestWithContext(c.ctx, http.MethodGet, uri, http.NoBody)
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header = c.headers
+	req := fasthttp.AcquireRequest()
+	defer fasthttp.ReleaseRequest(req)
+	c.headers.CopyTo(&req.Header)
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
+	uri := fasthttp.AcquireURI()
+	defer fasthttp.ReleaseURI(uri)
+	uri.SetScheme(c.parsedAddr()[0])
+	uri.SetHost(c.parsedAddr()[1])
+	uri.SetPath("/v1/blocks")
+	uri.SetQueryString(u)
+
+	req.SetURI(uri)
+
+	resp := fasthttp.AcquireResponse()
+	defer fasthttp.ReleaseResponse(resp)
+	if err := c.httpClient.Do(req, resp); err != nil {
+		c.lgr.Error(err)
 		return nil, err
 	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
 
-	b, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
+	if resp.StatusCode() != 200 {
+		if resp.StatusCode() < 500 {
+			var errorResponse Response
+			if err := json.Unmarshal(resp.Body(), &errorResponse); err != nil {
+				c.lgr.Error(err)
+				return nil, err
+			}
+
+			c.lgr.Error(errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage())))
+			return nil, errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage()))
+		}
+
+		return nil, errors.New(fasthttp.StatusMessage(resp.StatusCode()))
 	}
 
-	_ = resp.Body.Close()
-
-	if err := json.Unmarshal(b, &lastBlock); err != nil {
+	if err := json.Unmarshal(resp.Body(), &lastBlock); err != nil {
+		c.lgr.Error(err)
 		return nil, err
 	}
 
@@ -673,45 +765,57 @@ func (c *client) Tx(id string, signature string, chainName, chainVersion *string
 	var txResponse Response
 	txResponse.Data = &Transaction{}
 
-	uri := c.address + "/v1/tx/" + id
+	u := ""
 	if chainName != nil && chainVersion != nil {
-		uri += "?chain_name=" + *chainName + "&chain_version=" + *chainVersion
+		u += "chain_name=" + *chainName + "&chain_version=" + *chainVersion
 	} else {
-		uri += "?chain_name=" + c.chainName + "&chain_version=" + c.chainVersion
+		u += "chain_name=" + c.chainName + "&chain_version=" + c.chainVersion
 	}
 
-	req, err := http.NewRequestWithContext(c.ctx, http.MethodGet, uri, http.NoBody)
-	if err != nil {
-		return nil, err
-	}
+	req := fasthttp.AcquireRequest()
+	defer fasthttp.ReleaseRequest(req)
 
-	req.Header = c.headers
+	uri := fasthttp.AcquireURI()
+	defer fasthttp.ReleaseURI(uri)
+	uri.SetScheme(c.parsedAddr()[0])
+	uri.SetHost(c.parsedAddr()[1])
+	uri.SetPath("/v1/tx/" + id)
+	uri.SetQueryString(u)
+
+	req.SetURI(uri)
+
+	c.headers.CopyTo(&req.Header)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Signature", signature)
 
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
-
-	b, err := io.ReadAll(resp.Body)
-	if err != nil {
+	resp := fasthttp.AcquireResponse()
+	defer fasthttp.ReleaseResponse(resp)
+	if err := c.httpClient.Do(req, resp); err != nil {
+		c.lgr.Error(err)
 		return nil, err
 	}
 
-	_ = resp.Body.Close()
-	if err = json.Unmarshal(b, &txResponse); err != nil {
+	if resp.StatusCode() != 200 {
+		if resp.StatusCode() < 500 {
+			var errorResponse Response
+			if err := json.Unmarshal(resp.Body(), &errorResponse); err != nil {
+				c.lgr.Error(err)
+				return nil, err
+			}
+
+			c.lgr.Error(errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage())))
+			return nil, errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage()))
+		}
+
+		return nil, errors.New(fasthttp.StatusMessage(resp.StatusCode()))
+	}
+
+	if err := json.Unmarshal(resp.Body(), &txResponse); err != nil {
+		c.lgr.Error(err)
 		return nil, err
 	}
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, errors.New(txResponse.Detail)
-	}
-
-	return txResponse.Data.(*Transaction), nil
+	return txResponse.GetData().(*Transaction), nil
 }
 
 // TxSummary fetch summary with given parameters
@@ -729,44 +833,52 @@ func (c *client) TxSummary(summary *Summary) (lastBlockHeight uint64, lastTransa
 		summary.ChainVersion = &c.chainVersion
 	}
 
-	var req *http.Request
-
-	req, err = summary.ToRequest()
+	req, err := summary.ToRequest()
 	if err != nil {
+		c.lgr.Error(err)
 		return 0, nil, 0, err
 	}
+	defer fasthttp.ReleaseRequest(req)
 
-	req.Header = c.headers
+	uri := fasthttp.AcquireURI()
+	defer fasthttp.ReleaseURI(uri)
+	uri.SetScheme(c.parsedAddr()[0])
+	uri.SetHost(c.parsedAddr()[1])
+	uri.SetPath(summary.URI())
+
+	req.SetURI(uri)
+
+	c.headers.CopyTo(&req.Header)
 	req.Header.Set("Content-Type", "application/json")
 
-	req.URL, _ = url.Parse(c.address + summary.URI())
-
 	var summaryResponse SummaryResponse
-	var resp *http.Response
 
-	resp, err = c.httpClient.Do(req)
-	if err != nil {
-		return 0, nil, 0, err
-	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
+	resp := fasthttp.AcquireResponse()
+	defer fasthttp.ReleaseResponse(resp)
 
-	if resp.StatusCode != 200 {
-		err = errors.New("transaction requests " + strconv.Itoa(resp.StatusCode) + " failed")
+	req.Header.SetMethod(fasthttp.MethodPost)
+	if err = c.httpClient.Do(req, resp); err != nil {
+		c.lgr.Error(err)
 		return 0, nil, 0, err
 	}
 
-	var b []byte
+	if resp.StatusCode() != 200 {
+		if resp.StatusCode() < 500 {
+			var errorResponse Response
+			if err = json.Unmarshal(resp.Body(), &errorResponse); err != nil {
+				c.lgr.Error(err)
+				return 0, nil, 0, err
+			}
 
-	b, err = io.ReadAll(resp.Body)
-	if err != nil {
-		return 0, nil, 0, err
+			c.lgr.Error(errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage())))
+			return 0, nil, 0, errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage()))
+		}
+
+		return 0, nil, 0, errors.New(fasthttp.StatusMessage(resp.StatusCode()))
 	}
 
-	_ = resp.Body.Close()
-
-	if err = json.Unmarshal(b, &summaryResponse); err != nil {
+	if err = json.Unmarshal(resp.Body(), &summaryResponse); err != nil {
+		c.lgr.Error(err)
 		return 0, nil, 0, err
 	}
 
@@ -777,6 +889,7 @@ func (c *client) TxSummary(summary *Summary) (lastBlockHeight uint64, lastTransa
 func (c *client) TxSearch(search *Search) (txs []*Transaction, totalCount uint64, err error) {
 	if !search.IsValid() {
 		err = errors.New("invalid parameters")
+		c.lgr.Error(err)
 		return nil, 0, err
 	}
 
@@ -788,53 +901,52 @@ func (c *client) TxSearch(search *Search) (txs []*Transaction, totalCount uint64
 		search.ChainVersion = &c.chainVersion
 	}
 
-	var req *http.Request
-
-	req, err = search.ToRequest()
+	req, err := search.ToRequest()
 	if err != nil {
+		c.lgr.Error(err)
 		return nil, 0, err
 	}
+	defer fasthttp.ReleaseRequest(req)
 
-	req.Header = c.headers
+	c.headers.CopyTo(&req.Header)
 	req.Header.Set("Content-Type", "application/json")
 
-	req.URL, _ = url.Parse(c.address + search.URI())
+	uri := fasthttp.AcquireURI()
+	defer fasthttp.ReleaseURI(uri)
+	uri.SetScheme(c.parsedAddr()[0])
+	uri.SetHost(c.parsedAddr()[1])
+	uri.SetPath(search.URI())
+
+	req.SetURI(uri)
 
 	var searchResponse SearchResponse
-	var resp *http.Response
 
-	resp, err = c.httpClient.Do(req)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
+	resp := fasthttp.AcquireResponse()
+	defer fasthttp.ReleaseResponse(resp)
 
-	var b []byte
-
-	if resp.StatusCode != 200 {
-		b, err = io.ReadAll(resp.Body)
-		if err != nil {
-			return nil, 0, err
-		}
-
-		var errorResponse Response
-		if err = json.Unmarshal(b, &errorResponse); err != nil {
-			return nil, 0, err
-		}
-
-		return nil, 0, errors.New(errorResponse.Detail)
-	}
-
-	b, err = io.ReadAll(resp.Body)
-	if err != nil {
+	req.Header.SetMethod(fasthttp.MethodPost)
+	if err = c.httpClient.Do(req, resp); err != nil {
+		c.lgr.Error(err)
 		return nil, 0, err
 	}
 
-	_ = resp.Body.Close()
+	if resp.StatusCode() != 200 {
+		if resp.StatusCode() < 500 {
+			var errorResponse Response
+			if err = json.Unmarshal(resp.Body(), &errorResponse); err != nil {
+				c.lgr.Error(err)
+				return nil, 0, err
+			}
 
-	if err = json.Unmarshal(b, &searchResponse); err != nil {
+			c.lgr.Error(errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage())))
+			return nil, 0, errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage()))
+		}
+
+		return nil, 0, errors.New(fasthttp.StatusMessage(resp.StatusCode()))
+	}
+
+	if err = json.Unmarshal(resp.Body(), &searchResponse); err != nil {
+		c.lgr.Error(err)
 		return nil, 0, err
 	}
 
@@ -842,20 +954,39 @@ func (c *client) TxSearch(search *Search) (txs []*Transaction, totalCount uint64
 }
 
 func (c *client) Broadcast(id string, version uint32, typ Type, data []byte, senderAddress, recipientAddress string, sign []byte, fee uint64) (*BroadcastResponse, error) {
-	return c.broadcast(id, version, typ, data, senderAddress, recipientAddress, sign, fee, false, false)
+	resp, err := c.broadcast(id, version, typ, data, senderAddress, recipientAddress, sign, fee, false, false)
+	if err != nil {
+		c.lgr.Error(err)
+		return nil, err
+	}
+
+	return resp, nil
 }
 
 func (c *client) BroadcastSync(id string, version uint32, typ Type, data []byte, senderAddress, recipientAddress string, sign []byte, fee uint64) (*BroadcastResponse, error) {
-	return c.broadcast(id, version, typ, data, senderAddress, recipientAddress, sign, fee, false, true)
+	resp, err := c.broadcast(id, version, typ, data, senderAddress, recipientAddress, sign, fee, false, true)
+	if err != nil {
+		c.lgr.Error(err)
+		return nil, err
+	}
+
+	return resp, nil
 }
 
 func (c *client) BroadcastCommit(id string, version uint32, typ Type, data []byte, senderAddress, recipientAddress string, sign []byte, fee uint64) (*BroadcastResponse, error) {
-	return c.broadcast(id, version, typ, data, senderAddress, recipientAddress, sign, fee, true, false)
+	resp, err := c.broadcast(id, version, typ, data, senderAddress, recipientAddress, sign, fee, true, false)
+	if err != nil {
+		c.lgr.Error(err)
+		return nil, err
+	}
+
+	return resp, nil
 }
 
 // Broadcast ...
 func (c *client) broadcast(id string, version uint32, typ Type, data []byte, senderAddress, recipientAddress string, sign []byte, fee uint64, commit, sync bool) (*BroadcastResponse, error) {
 	if !typ.IsValid() {
+		c.lgr.Error("invalid type")
 		return nil, errors.New("invalid type")
 	}
 
@@ -870,46 +1001,51 @@ func (c *client) broadcast(id string, version uint32, typ Type, data []byte, sen
 		Fee:           fee,
 	}
 
-	var err error
-	var req *http.Request
-
-	req, err = broadcast.ToRequest()
+	req, err := broadcast.ToRequest()
 	if err != nil {
+		c.lgr.Error(err)
 		return nil, err
 	}
+	defer fasthttp.ReleaseRequest(req)
 
-	req.Header = c.headers
+	c.headers.CopyTo(&req.Header)
 	req.Header.Set("Content-Type", "application/json")
 
-	req.URL, _ = url.Parse(c.address + broadcast.URI(commit, sync))
+	uri := fasthttp.AcquireURI()
+	defer fasthttp.ReleaseURI(uri)
+	uri.SetScheme(c.parsedAddr()[0])
+	uri.SetHost(c.parsedAddr()[1])
+	uri.SetPath(broadcast.URI(commit, sync))
 
-	var resp *http.Response
+	req.SetURI(uri)
 
-	resp, err = c.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
+	resp := fasthttp.AcquireResponse()
+	defer fasthttp.ReleaseResponse(resp)
 
-	if resp.StatusCode != 201 {
-		err = errors.New("transaction can not be broadcast")
-		return nil, err
-	}
-
-	var b []byte
-
-	b, err = io.ReadAll(resp.Body)
-	if err != nil {
+	req.Header.SetMethod(fasthttp.MethodPost)
+	if err = c.httpClient.Do(req, resp); err != nil {
+		c.lgr.Error(err)
 		return nil, err
 	}
 
-	_ = resp.Body.Close()
+	if resp.StatusCode() != 201 {
+		if resp.StatusCode() < 500 {
+			var errorResponse Response
+			if err = json.Unmarshal(resp.Body(), &errorResponse); err != nil {
+				c.lgr.Error(err)
+				return nil, err
+			}
+
+			c.lgr.Error(errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage())))
+			return nil, errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage()))
+		}
+
+		return nil, errors.New(fasthttp.StatusMessage(resp.StatusCode()))
+	}
 
 	var broadcastResponse BroadcastResponse
 
-	if err = json.Unmarshal(b, &broadcastResponse); err != nil {
+	if err = json.Unmarshal(resp.Body(), &broadcastResponse); err != nil {
 		return nil, err
 	}
 

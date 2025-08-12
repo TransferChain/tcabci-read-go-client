@@ -4,7 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"net/http"
+
+	"github.com/valyala/fasthttp"
 )
 
 type OrderBy string
@@ -147,13 +148,15 @@ func (s *Search) ToJSON() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (s *Search) ToRequest() (*http.Request, error) {
+func (s *Search) ToRequest() (*fasthttp.Request, error) {
 	b, err := s.ToJSON()
 	if err != nil {
 		return nil, err
 	}
 
-	return http.NewRequest(http.MethodPost, "", bytes.NewReader(b))
+	req := fasthttp.AcquireRequest()
+	req.SetBody(b)
+	return req, nil
 }
 
 type SearchResponse struct {
