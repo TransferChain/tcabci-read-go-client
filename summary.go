@@ -1,9 +1,9 @@
 package tcabcireadgoclient
 
 import (
-	"bytes"
 	"encoding/json"
-	"net/http"
+
+	"github.com/valyala/fasthttp"
 )
 
 type Summary struct {
@@ -12,7 +12,7 @@ type Summary struct {
 	Type               Type              `json:"typ,omitempty"`
 	ChainName          *string           `json:"chain_name,omitempty"`
 	ChainVersion       *string           `json:"chain_version,omitempty"`
-	SignedAddrs        map[string]string `json:"signed_addrs,omitempty"`
+	SignedAddresses    map[string]string `json:"signed_addrs,omitempty"`
 }
 
 func (s *Summary) URI() string {
@@ -28,11 +28,11 @@ func (s *Summary) IsValid() bool {
 		return false
 	}
 
-	if len(s.RecipientAddresses) > 0 && len(s.RecipientAddresses) != len(s.SignedAddrs) {
+	if len(s.RecipientAddresses) > 0 && len(s.RecipientAddresses) != len(s.SignedAddresses) {
 		return false
 	}
 
-	if len(s.SenderAddresses) > 0 && len(s.SenderAddresses) != len(s.SignedAddrs) {
+	if len(s.SenderAddresses) > 0 && len(s.SenderAddresses) != len(s.SignedAddresses) {
 		return false
 	}
 
@@ -47,13 +47,15 @@ func (s *Summary) ToJSON() ([]byte, error) {
 	return json.Marshal(s)
 }
 
-func (s *Summary) ToRequest() (*http.Request, error) {
+func (s *Summary) ToRequest() (*fasthttp.Request, error) {
 	b, err := s.ToJSON()
 	if err != nil {
 		return nil, err
 	}
 
-	return http.NewRequest(http.MethodPost, "", bytes.NewReader(b))
+	req := fasthttp.AcquireRequest()
+	req.SetBody(b)
+	return req, nil
 }
 
 type SummaryResponse struct {
