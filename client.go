@@ -154,7 +154,7 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 
 	c := &client{
 		ctx:                 ctx,
-		version:             "v1.5.0",
+		version:             "v1.6.0",
 		lgr:                 NewLogger(ctx),
 		address:             address,
 		wsAddress:           wsAddress,
@@ -268,7 +268,7 @@ func (c *client) SetVerbose(v bool) (Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	trn, err := newTransport(pool, v)
 	if err != nil {
 		return nil, err
