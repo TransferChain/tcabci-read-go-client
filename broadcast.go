@@ -1,9 +1,9 @@
 package tcabcireadgoclient
 
 import (
-	"bytes"
 	"encoding/json"
-	"net/http"
+
+	"github.com/valyala/fasthttp"
 )
 
 type Broadcast struct {
@@ -25,7 +25,7 @@ func (b *Broadcast) URI(commit, sync bool) string {
 	if sync {
 		return "/v1/tx/sync"
 	}
-	
+
 	return "/v1/tx"
 }
 
@@ -33,13 +33,15 @@ func (b *Broadcast) ToJSON() ([]byte, error) {
 	return json.Marshal(b)
 }
 
-func (b *Broadcast) ToRequest() (*http.Request, error) {
+func (b *Broadcast) ToRequest() (*fasthttp.Request, error) {
 	body, err := b.ToJSON()
 	if err != nil {
 		return nil, err
 	}
 
-	return http.NewRequest(http.MethodPost, "", bytes.NewReader(body))
+	req := fasthttp.AcquireRequest()
+	req.SetBody(body)
+	return req, nil
 }
 
 type BroadcastResponse struct {

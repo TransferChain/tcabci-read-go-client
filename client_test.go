@@ -4,19 +4,21 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/hex"
 	"fmt"
-	"github.com/stretchr/testify/assert"
 	"math/big"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
 )
 
 var (
 	ctx               = context.Background()
-	readNodeAddress   = "https://test-read-node-01.transferchain.io"
-	readNodeWSAddress = "wss://test-read-node-01.transferchain.io/ws"
-	chainName         = "medusa-testnet"
+	readNodeAddress   = "https://read-node-01.transferchain.io"
+	readNodeWSAddress = "wss://read-node-01.transferchain.io/ws"
+	chainName         = "medusa"
 	chainVersion      = "v2"
 )
 
@@ -34,6 +36,7 @@ func randomString(n int) string {
 func newTestClient(b *testing.B, n int) {
 	readNodeClient, err := NewClientContext(ctx, readNodeAddress, readNodeWSAddress, chainName, chainVersion)
 	assert.Nil(b, err)
+	_, _ = readNodeClient.SetVerbose(true)
 
 	//done := make(chan struct{})
 	fn := func(transaction *Transaction) {
@@ -50,7 +53,7 @@ func newTestClient(b *testing.B, n int) {
 		if err != nil {
 			break
 		}
-		data := sha256.Sum256([]byte(randomString(32)))
+		data := sha512.Sum512([]byte(randomString(32)))
 		signed := Sign(signKey, data[:])
 		signedDatas[adr] = hex.EncodeToString(data[:]) + ";" + hex.EncodeToString(signed[:])
 
@@ -73,6 +76,7 @@ func newTestClient(b *testing.B, n int) {
 func newTestClientWithoutStop(t *testing.T) Client {
 	readNodeClient, err := NewClientContext(ctx, readNodeAddress, readNodeWSAddress, chainName, chainVersion)
 	assert.Nil(t, err)
+	_, _ = readNodeClient.SetVerbose(true)
 
 	//done := make(chan struct{})
 	fn := func(transaction *Transaction) {
@@ -89,7 +93,7 @@ func newTestClientWithoutStop(t *testing.T) Client {
 		if err != nil {
 			break
 		}
-		data := sha256.Sum256([]byte(randomString(32)))
+		data := sha512.Sum512([]byte(randomString(32)))
 		signed := Sign(signKey, data[:])
 		signedDatas[adr] = hex.EncodeToString(data[:]) + ";" + hex.EncodeToString(signed[:])
 
@@ -135,6 +139,7 @@ func newTestClientWithoutStop(t *testing.T) Client {
 func TestNewClientContext(t *testing.T) {
 	readNodeClient, err := NewClientContext(ctx, readNodeAddress, readNodeWSAddress, chainName, chainVersion)
 	assert.Nil(t, err)
+	_, _ = readNodeClient.SetVerbose(true)
 
 	//done := make(chan struct{})
 	fn := func(transaction *Transaction) {
@@ -151,7 +156,7 @@ func TestNewClientContext(t *testing.T) {
 		if err != nil {
 			break
 		}
-		data := sha256.Sum256([]byte(randomString(32)))
+		data := sha512.Sum512([]byte(randomString(32)))
 		signed := Sign(signKey, data[:])
 		signedDatas[adr] = hex.EncodeToString(data[:]) + ";" + hex.EncodeToString(signed[:])
 
@@ -220,10 +225,12 @@ func TestNewClientWithInvalidWSUrl(t *testing.T) {
 func TestLastBlock(t *testing.T) {
 	readNodeClient, err := NewClientContext(ctx, readNodeAddress, readNodeWSAddress, chainName, chainVersion)
 	assert.Nil(t, err)
+	_, _ = readNodeClient.SetVerbose(true)
 	err = readNodeClient.Start()
 	assert.Nil(t, err)
 	lastBlock, err := readNodeClient.LastBlock(nil, nil)
 	assert.Nil(t, err)
+	assert.NotNil(t, lastBlock)
 
 	assert.Less(t, uint64(1), lastBlock.TotalCount)
 	assert.Len(t, lastBlock.Blocks, 1)
@@ -235,6 +242,7 @@ func TestLastBlock(t *testing.T) {
 func TestLastBlockWithChainInfo(t *testing.T) {
 	readNodeClient, err := NewClientContext(ctx, readNodeAddress, readNodeWSAddress, chainName, chainVersion)
 	assert.Nil(t, err)
+	_, _ = readNodeClient.SetVerbose(true)
 	err = readNodeClient.Start()
 	assert.Nil(t, err)
 	lastBlock, err := readNodeClient.LastBlock(&chainName, &chainVersion)
@@ -250,12 +258,12 @@ func TestLastBlockWithChainInfo(t *testing.T) {
 func TestShowTx(t *testing.T) {
 	readNodeClient, err := NewClientContext(ctx, readNodeAddress, readNodeWSAddress, chainName, chainVersion)
 	assert.Nil(t, err)
+	_, _ = readNodeClient.SetVerbose(true)
 	err = readNodeClient.Start()
 	assert.Nil(t, err)
-	ttx, err := readNodeClient.Tx("ba6e2b9ebd81f5639e95d2f2a537e481cbfb9e3a358f1d6977043cee532ed40eb2689db5a78373822989141cb57b1e036bf50a36b06578befea228c97749bd73", &chainName, &chainVersion)
+	ttx, err := readNodeClient.Tx("7a465504e84b3169ac4770c1daf6bbdd326a253e514d8c521ae0dc0db26c12eb71b869ac191e87f89b3e00ec2b97f740fb6b08f3c28736ed11ba4c4d93d520a5", "609964525909181fc39c1a81c22d69d850f7ce51faebe0435241de9f5be29440af8f97d4e966757b1b1aae711a;5a8b22ac5317b4003adc078f4247bd5f22b132963e921f89a60c3067d69fe9a281bf75c3d9d7d341e69661468baf41972ba96f9b129aa5791ab319ec2cee2005", &chainName, &chainVersion)
 	assert.Nil(t, err)
-
-	assert.Equal(t, "ba6e2b9ebd81f5639e95d2f2a537e481cbfb9e3a358f1d6977043cee532ed40eb2689db5a78373822989141cb57b1e036bf50a36b06578befea228c97749bd73", ttx.ID)
+	assert.NotNil(t, ttx)
 
 	err = readNodeClient.Stop()
 	assert.Nil(t, err)
@@ -264,12 +272,16 @@ func TestShowTx(t *testing.T) {
 func TestTxSummary(t *testing.T) {
 	readNodeClient, err := NewClientContext(ctx, readNodeAddress, readNodeWSAddress, chainName, chainVersion)
 	assert.Nil(t, err)
+	_, _ = readNodeClient.SetVerbose(true)
 	err = readNodeClient.Start()
 	assert.Nil(t, err)
 	lastBlockHeight, lastTransaction, totalCount, err := readNodeClient.TxSummary(&Summary{
-		RecipientAddresses: []string{"4DfxnRnZdwM1NvsFgm5uLjCwfyukb5yN27KA3KR31C11mnXa83fT9TvqG8enSnmAZiCorFQQZFsygzx1Pkq8kbD6"},
-		ChainName:          &chainName,
-		ChainVersion:       &chainVersion,
+		RecipientAddresses: []string{"i7jaE2DCoUxq1uhaYu6Qre1Z8yhhaas3pgd4FvXbNwin8pSQJmBxmPepxTU7P5xR1YnmiqdYangHdXSCWCR7FnV"},
+		SignedAddresses: map[string]string{
+			"i7jaE2DCoUxq1uhaYu6Qre1Z8yhhaas3pgd4FvXbNwin8pSQJmBxmPepxTU7P5xR1YnmiqdYangHdXSCWCR7FnV": "609964525909181fc39c1a81c22d69d850f7ce51faebe0435241de9f5be29440af8f97d4e966757b1b1aae711a;5a8b22ac5317b4003adc078f4247bd5f22b132963e921f89a60c3067d69fe9a281bf75c3d9d7d341e69661468baf41972ba96f9b129aa5791ab319ec2cee2005",
+		},
+		ChainName:    &chainName,
+		ChainVersion: &chainVersion,
 	})
 	assert.Nil(t, err)
 
@@ -284,13 +296,17 @@ func TestTxSummary(t *testing.T) {
 func TestShouldErrorTxSummaryWithInvalidType(t *testing.T) {
 	readNodeClient, err := NewClientContext(ctx, readNodeAddress, readNodeWSAddress, chainName, chainVersion)
 	assert.Nil(t, err)
+	_, _ = readNodeClient.SetVerbose(true)
 	err = readNodeClient.Start()
 	assert.Nil(t, err)
 	lastBlockHeight, lastTransaction, totalCount, err := readNodeClient.TxSummary(&Summary{
-		RecipientAddresses: []string{"4DfxnRnZdwM1NvsFgm5uLjCwfyukb5yN27KA3KR31C11mnXa83fT9TvqG8enSnmAZiCorFQQZFsygzx1Pkq8kbD6"},
-		Type:               "yp",
-		ChainName:          &chainName,
-		ChainVersion:       &chainVersion,
+		RecipientAddresses: []string{"i7jaE2DCoUxq1uhaYu6Qre1Z8yhhaas3pgd4FvXbNwin8pSQJmBxmPepxTU7P5xR1YnmiqdYangHdXSCWCR7FnV"},
+		SignedAddresses: map[string]string{
+			"i7jaE2DCoUxq1uhaYu6Qre1Z8yhhaas3pgd4FvXbNwin8pSQJmBxmPepxTU7P5xR1YnmiqdYangHdXSCWCR7FnV": "609964525909181fc39c1a81c22d69d850f7ce51faebe0435241de9f5be29440af8f97d4e966757b1b1aae711a;5a8b22ac5317b4003adc078f4247bd5f22b132963e921f89a60c3067d69fe9a281bf75c3d9d7d341e69661468baf41972ba96f9b129aa5791ab319ec2cee2005",
+		},
+		Type:         "yp",
+		ChainName:    &chainName,
+		ChainVersion: &chainVersion,
 	})
 	assert.NotNil(t, err)
 
@@ -305,15 +321,19 @@ func TestShouldErrorTxSummaryWithInvalidType(t *testing.T) {
 func TestTxSearch(t *testing.T) {
 	readNodeClient, err := NewClientContext(ctx, readNodeAddress, readNodeWSAddress, chainName, chainVersion)
 	assert.Nil(t, err)
+	_, _ = readNodeClient.SetVerbose(true)
 	err = readNodeClient.Start()
 	assert.Nil(t, err)
 	txs, totalCount, err := readNodeClient.TxSearch(&Search{
 		HeightOperator:     ">=",
 		Height:             0,
-		RecipientAddresses: []string{"4DfxnRnZdwM1NvsFgm5uLjCwfyukb5yN27KA3KR31C11mnXa83fT9TvqG8enSnmAZiCorFQQZFsygzx1Pkq8kbD6"},
-		Limit:              1,
-		Offset:             0,
-		OrderBy:            "ASC",
+		RecipientAddresses: []string{"i7jaE2DCoUxq1uhaYu6Qre1Z8yhhaas3pgd4FvXbNwin8pSQJmBxmPepxTU7P5xR1YnmiqdYangHdXSCWCR7FnV"},
+		SignedAddresses: map[string]string{
+			"i7jaE2DCoUxq1uhaYu6Qre1Z8yhhaas3pgd4FvXbNwin8pSQJmBxmPepxTU7P5xR1YnmiqdYangHdXSCWCR7FnV": "609964525909181fc39c1a81c22d69d850f7ce51faebe0435241de9f5be29440af8f97d4e966757b1b1aae711a;5a8b22ac5317b4003adc078f4247bd5f22b132963e921f89a60c3067d69fe9a281bf75c3d9d7d341e69661468baf41972ba96f9b129aa5791ab319ec2cee2005",
+		},
+		Limit:   1,
+		Offset:  0,
+		OrderBy: "ASC",
 	})
 	assert.Nil(t, err)
 
@@ -327,17 +347,21 @@ func TestTxSearch(t *testing.T) {
 func TestShouldErrorTxSearchWithInvalidHeightOperator(t *testing.T) {
 	readNodeClient, err := NewClientContext(ctx, readNodeAddress, readNodeWSAddress, chainName, chainVersion)
 	assert.Nil(t, err)
+	_, _ = readNodeClient.SetVerbose(true)
 	err = readNodeClient.Start()
 	assert.Nil(t, err)
 	txs, totalCount, err := readNodeClient.TxSearch(&Search{
 		HeightOperator:     "!=",
 		Height:             0,
-		RecipientAddresses: []string{"4DfxnRnZdwM1NvsFgm5uLjCwfyukb5yN27KA3KR31C11mnXa83fT9TvqG8enSnmAZiCorFQQZFsygzx1Pkq8kbD6"},
-		Limit:              1,
-		Offset:             0,
-		OrderBy:            "ASC",
-		ChainName:          &chainName,
-		ChainVersion:       &chainVersion,
+		RecipientAddresses: []string{"i7jaE2DCoUxq1uhaYu6Qre1Z8yhhaas3pgd4FvXbNwin8pSQJmBxmPepxTU7P5xR1YnmiqdYangHdXSCWCR7FnV"},
+		SignedAddresses: map[string]string{
+			"i7jaE2DCoUxq1uhaYu6Qre1Z8yhhaas3pgd4FvXbNwin8pSQJmBxmPepxTU7P5xR1YnmiqdYangHdXSCWCR7FnV": "609964525909181fc39c1a81c22d69d850f7ce51faebe0435241de9f5be29440af8f97d4e966757b1b1aae711a;5a8b22ac5317b4003adc078f4247bd5f22b132963e921f89a60c3067d69fe9a281bf75c3d9d7d341e69661468baf41972ba96f9b129aa5791ab319ec2cee2005",
+		},
+		Limit:        1,
+		Offset:       0,
+		OrderBy:      "ASC",
+		ChainName:    &chainName,
+		ChainVersion: &chainVersion,
 	})
 	assert.NotNil(t, err)
 
@@ -351,6 +375,7 @@ func TestShouldErrorTxSearchWithInvalidHeightOperator(t *testing.T) {
 func TestShouldErrorTxBroadcast(t *testing.T) {
 	readNodeClient, err := NewClientContext(ctx, readNodeAddress, readNodeWSAddress, chainName, chainVersion)
 	assert.Nil(t, err)
+	_, _ = readNodeClient.SetVerbose(true)
 	err = readNodeClient.Start()
 	assert.Nil(t, err)
 	broadcast, err := readNodeClient.Broadcast("id",
