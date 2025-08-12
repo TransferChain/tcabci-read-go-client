@@ -152,6 +152,8 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 		return nil, err
 	}
 
+	maxIdleConnDuration, _ := time.ParseDuration("1h")
+
 	c := &client{
 		ctx:                 ctx,
 		version:             "v1.6.0",
@@ -177,16 +179,26 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 		},
 		sendBuf:    make(chan sendMsg, runtime.NumCPU()),
 		receivedCh: make(chan Received, runtime.NumCPU()),
-		httpClient: &fasthttp.Client{},
+		httpClient: &fasthttp.Client{
+			WriteTimeout:                  7 * time.Second,
+			ReadTimeout:                   7 * time.Second,
+			NoDefaultUserAgentHeader:      true,
+			DisableHeaderNamesNormalizing: true,
+			DisablePathNormalizing:        true,
+			MaxIdleConnDuration:           maxIdleConnDuration,
+			Dial: (&fasthttp.TCPDialer{
+				Concurrency:      4096,
+				DNSCacheDuration: time.Hour,
+			}).Dial,
+		},
 	}
+
 	trn, err := newTransport(pool, false)
 	if err != nil {
 		return nil, err
 	}
 
 	c.httpClient.Transport = trn
-	c.httpClient.WriteTimeout = 7 * time.Second
-	c.httpClient.ReadTimeout = 7 * time.Second
 
 	c.headers.Set("Client", fmt.Sprintf("tcabaci-read-go-client-%s", c.version))
 	c.headers.Set("User-Agent", fmt.Sprintf("tcabaci-read-go-client-%s", c.version))

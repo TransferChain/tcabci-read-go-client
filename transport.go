@@ -27,6 +27,8 @@ func newTransport(pool *x509.CertPool, verbose bool) (*transport, error) {
 }
 
 func (r *transport) RoundTrip(hc *fasthttp.HostClient, req *fasthttp.Request, resp *fasthttp.Response) (retry bool, err error) {
+	hc.TLSConfig = r.TLSClientConfig
+
 	if !r.verbose {
 		retry, err = fasthttp.DefaultTransport.RoundTrip(hc, req, resp)
 		if err != nil {
