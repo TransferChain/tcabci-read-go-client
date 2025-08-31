@@ -9,7 +9,7 @@ require (
 	github.com/fasthttp/websocket v1.5.12
 	github.com/sirupsen/logrus v1.9.3
 	github.com/stretchr/testify v1.10.0
-	github.com/valyala/fasthttp v1.64.0
+	github.com/valyala/fasthttp v1.65.0
 	golang.org/x/crypto v0.41.0
 )
 
