@@ -82,6 +82,8 @@ const (
 	TypePasswdRoomData        Type = "passwd_room_data"
 	TypePasswdRoomDataDelete  Type = "passwd_room_data_delete"
 	TypePasswdRoomDataPolicy  Type = "passwd_room_data_policy"
+	TypePasswdDataV2          Type = "pwdd"
+	TypePasswdDataV2Policy    Type = "pwdd_policy"
 )
 
 var TypesSlice = []Type{
@@ -133,13 +135,14 @@ var TypesSlice = []Type{
 	TypePasswdRoomData,
 	TypePasswdRoomDataDelete,
 	TypePasswdRoomDataPolicy,
+	TypePasswdDataV2,
+	TypePasswdDataV2Policy,
 }
 
 // Transaction read node transaction model
 type Transaction struct {
 	Order         *uint64     `json:"order,omitempty"`
 	ID            interface{} `json:"id"`
-	BlockID       uint64      `json:"block_id"`
 	Height        uint64      `json:"height"`
 	Identifier    string      `json:"identifier"`
 	Version       uint        `json:"version"`
