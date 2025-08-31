@@ -16,8 +16,8 @@ import (
 
 var (
 	ctx               = context.Background()
-	readNodeAddress   = "https://read-node-01.transferchain.io"
-	readNodeWSAddress = "wss://read-node-01.transferchain.io/ws"
+	readNodeAddress   = "https://test-read-node-01.transferchain.io"
+	readNodeWSAddress = "wss://test-read-node-01.transferchain.io/ws"
 	chainName         = "medusa"
 	chainVersion      = "v2"
 )

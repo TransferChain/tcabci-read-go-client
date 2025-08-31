@@ -156,7 +156,7 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 
 	c := &client{
 		ctx:                 ctx,
-		version:             "v1.6.1",
+		version:             "1.6.1",
 		lgr:                 NewLogger(ctx),
 		address:             address,
 		wsAddress:           wsAddress,
@@ -200,10 +200,10 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 
 	c.httpClient.Transport = trn
 
-	c.headers.Set("Client", fmt.Sprintf("tcabaci-read-go-client-%s", c.version))
-	c.headers.Set("User-Agent", fmt.Sprintf("tcabaci-read-go-client-%s", c.version))
-	c.wsHeaders.Set("Client", fmt.Sprintf("tcabaci-read-go-client-%s", c.version))
-	c.wsHeaders.Set("User-Agent", fmt.Sprintf("tcabaci-read-go-client-%s", c.version))
+	c.headers.Set("Client", fmt.Sprintf("tcabaci-read-go-client/%s", c.version))
+	c.headers.Set("User-Agent", fmt.Sprintf("tcabaci-read-go-client/%s", c.version))
+	c.wsHeaders.Set("Client", fmt.Sprintf("tcabaci-read-go-client/%s", c.version))
+	c.wsHeaders.Set("User-Agent", fmt.Sprintf("tcabaci-read-go-client/%s", c.version))
 
 	return c, nil
 }
