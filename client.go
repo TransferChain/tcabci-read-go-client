@@ -62,7 +62,10 @@ const (
 
 // Client TCABCI Read Node Websocket Client
 type Client interface {
+	// SetLogger ..
+	// Deprecated: use WithLogger/1
 	SetLogger(l Logger) Client
+	WithLogger(l Logger) Client
 	SetVerbose(verbose bool) (Client, error)
 	Start() error
 	Stop() error
@@ -80,36 +83,36 @@ type Client interface {
 }
 
 type client struct {
-	ctx                   context.Context
-	mainCtx               context.Context
-	mainCtxCancel         context.CancelFunc
-	conn                  *websocket.Conn
-	lgr                   Logger
-	verbose               bool
-	address               string
-	wsAddress             string
-	chainName             string
-	chainVersion          string
-	url                   *url.URL
-	wsURL                 *url.URL
-	headers               fasthttp.RequestHeader
-	wsHeaders             fasthttp.RequestHeader
-	version               string
-	subscribed            bool
-	connected             bool
-	started               bool
-	handshakeTimeout      time.Duration
-	listenCallback        func(transaction *Transaction)
-	subscribedAddresses   map[string]bool
-	subscribedSignedDatas map[string]string
-	listenCtx             context.Context
-	listenCtxCancel       context.CancelFunc
-	mut                   sync.RWMutex
-	sendBuf               chan sendMsg
-	pingTicker            *time.Ticker
-	dialer                *websocket.Dialer
-	receivedCh            chan Received
-	httpClient            *fasthttp.Client
+	ctx                  context.Context
+	mainCtx              context.Context
+	mainCtxCancel        context.CancelFunc
+	conn                 *websocket.Conn
+	lgr                  Logger
+	verbose              bool
+	address              string
+	wsAddress            string
+	chainName            string
+	chainVersion         string
+	url                  *url.URL
+	wsURL                *url.URL
+	headers              fasthttp.RequestHeader
+	wsHeaders            fasthttp.RequestHeader
+	version              string
+	subscribed           bool
+	connected            bool
+	started              bool
+	handshakeTimeout     time.Duration
+	listenCallback       func(transaction *Transaction)
+	subscribedAddresses  map[string]bool
+	subscribedSignedData map[string]string
+	listenCtx            context.Context
+	listenCtxCancel      context.CancelFunc
+	mut                  sync.RWMutex
+	sendBuf              chan sendMsg
+	pingTicker           *time.Ticker
+	dialer               *websocket.Dialer
+	receivedCh           chan Received
+	httpClient           *fasthttp.Client
 }
 
 type sendMsg struct {
@@ -156,7 +159,7 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 
 	c := &client{
 		ctx:                 ctx,
-		version:             "1.6.4",
+		version:             "1.6.5",
 		lgr:                 NewLogger(ctx),
 		address:             address,
 		wsAddress:           wsAddress,
@@ -200,76 +203,23 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 
 	c.httpClient.Transport = trn
 
-	c.headers.Set("Client", fmt.Sprintf("tcabaci-read-go-client/%s", c.version))
-	c.headers.Set("User-Agent", fmt.Sprintf("tcabaci-read-go-client/%s", c.version))
-	c.wsHeaders.Set("Client", fmt.Sprintf("tcabaci-read-go-client/%s", c.version))
-	c.wsHeaders.Set("User-Agent", fmt.Sprintf("tcabaci-read-go-client/%s", c.version))
+	c.headers.Set("Client", fmt.Sprintf("tcabaci-read-go-client/%s (%s;%s)", c.version, runtime.GOOS, runtime.GOARCH))
+	c.headers.Set("User-Agent", fmt.Sprintf("tcabaci-read-go-client/%s (%s;%s)", c.version, runtime.GOOS, runtime.GOARCH))
+	c.wsHeaders.Set("Client", fmt.Sprintf("tcabaci-read-go-client/%s (%s;%s)", c.version, runtime.GOOS, runtime.GOARCH))
+	c.wsHeaders.Set("User-Agent", fmt.Sprintf("tcabaci-read-go-client/%s (%s;%s)", c.version, runtime.GOOS, runtime.GOARCH))
 
 	return c, nil
 }
 
-func (c *client) parsedAddr() []string {
-	uri, _ := url.Parse(c.address)
-	return []string{uri.Scheme, uri.Host}
-}
-
-func (c *client) setStarted(b bool) {
-	c.mut.Lock()
-	c.started = b
-	c.mut.Unlock()
-}
-
-func (c *client) getStarted() bool {
-	return c.started
-}
-
-func (c *client) setConnected(b bool) {
-	c.mut.Lock()
-	c.connected = b
-	c.mut.Unlock()
-}
-
-func (c *client) isConnected() bool {
-	return c.connected
-}
-
-func (c *client) setSubscribed(b bool) {
-	c.mut.Lock()
-	c.subscribed = b
-	c.mut.Unlock()
-}
-
-func (c *client) getSubscribed() bool {
-	return c.subscribed
-}
-
-func (c *client) getConn() *websocket.Conn {
-	return c.conn
-}
-
-func (c *client) getSubscribedAddress() map[string]bool {
-	return c.subscribedAddresses
-}
-
-func (c *client) setSubscribedAddress(v map[string]bool) {
-	c.mut.Lock()
-	c.subscribedAddresses = v
-	c.mut.Unlock()
-}
-
-func (c *client) getSubscribedSignedDatas() map[string]string {
-	return c.subscribedSignedDatas
-}
-
-func (c *client) setSubscribedSignedDatas(v map[string]string) {
-	c.mut.Lock()
-	c.subscribedSignedDatas = v
-	c.mut.Unlock()
-}
-
+// SetLogger ..
+// Deprecated: use WithLogger/1
 func (c *client) SetLogger(l Logger) Client {
 	c.lgr = l
+	return c
+}
 
+func (c *client) WithLogger(l Logger) Client {
+	c.lgr = l
 	return c
 }
 
@@ -332,6 +282,459 @@ func (c *client) Stop() error {
 	c.setConnected(false)
 
 	return nil
+}
+
+func (c *client) Write(b []byte) error {
+	return c.write(sendMsg{
+		typ:        message,
+		messageTyp: websocket.TextMessage,
+		msg:        b,
+	})
+}
+
+// SetListenCallback Callback that will be called when the WS client captures a
+// transaction event
+func (c *client) SetListenCallback(fn func(transaction *Transaction)) {
+	c.listenCallback = fn
+}
+
+// Subscribe to given addresses
+func (c *client) Subscribe(addresses []string, signedDatas map[string]string, txTypes ...Type) error {
+	return c.subscribe(false, addresses, signedDatas, txTypes...)
+}
+
+// Unsubscribe to given addresses
+func (c *client) Unsubscribe() error {
+	return c.unsubscribe(false)
+}
+
+// LastBlock fetch last block in blockchain network
+func (c *client) LastBlock(chainName, chainVersion *string) (*LastBlock, error) {
+	var lastBlock LastBlock
+
+	u := "limit=1&offset=0"
+	if chainName != nil && chainVersion != nil {
+		u += "&chain_name=" + *chainName + "&chain_version=" + *chainVersion
+	} else {
+		u += "&chain_name=" + c.chainName + "&chain_version=" + c.chainVersion
+	}
+
+	req := fasthttp.AcquireRequest()
+	defer fasthttp.ReleaseRequest(req)
+	c.headers.CopyTo(&req.Header)
+	req.Header.Set("Content-Type", "application/json")
+
+	uri := fasthttp.AcquireURI()
+	defer fasthttp.ReleaseURI(uri)
+	uri.SetScheme(c.parsedAddr()[0])
+	uri.SetHost(c.parsedAddr()[1])
+	uri.SetPath("/v1/blocks")
+	uri.SetQueryString(u)
+
+	req.SetURI(uri)
+
+	resp := fasthttp.AcquireResponse()
+	defer fasthttp.ReleaseResponse(resp)
+	if err := c.httpClient.Do(req, resp); err != nil {
+		c.lgr.Error(err)
+		return nil, err
+	}
+
+	if resp.StatusCode() >= 400 && resp.StatusCode() < 500 {
+		var errorResponse Response
+		if err := json.Unmarshal(resp.Body(), &errorResponse); err != nil {
+			c.lgr.Error(err)
+			return nil, err
+		}
+
+		c.lgr.Error(errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage())))
+		return nil, errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage()))
+	}
+
+	if resp.StatusCode() >= 500 {
+		return nil, errors.New(fasthttp.StatusMessage(resp.StatusCode()))
+	}
+
+	if resp.StatusCode() != 200 {
+		return nil, errors.New("unexpected status code: " + strconv.Itoa(resp.StatusCode()))
+	}
+
+	if err := json.Unmarshal(resp.Body(), &lastBlock); err != nil {
+		c.lgr.Error(err)
+		return nil, err
+	}
+
+	return &lastBlock, nil
+}
+
+func (c *client) Tx(id string, signature string, chainName, chainVersion *string) (*Transaction, error) {
+	if id == "" {
+		return nil, errors.New("invalid tx id")
+	}
+
+	var txResponse Response
+	txResponse.Data = &Transaction{}
+
+	u := ""
+	if chainName != nil && chainVersion != nil {
+		u += "chain_name=" + *chainName + "&chain_version=" + *chainVersion
+	} else {
+		u += "chain_name=" + c.chainName + "&chain_version=" + c.chainVersion
+	}
+
+	req := fasthttp.AcquireRequest()
+	defer fasthttp.ReleaseRequest(req)
+
+	uri := fasthttp.AcquireURI()
+	defer fasthttp.ReleaseURI(uri)
+	uri.SetScheme(c.parsedAddr()[0])
+	uri.SetHost(c.parsedAddr()[1])
+	uri.SetPath("/v1/tx/" + id)
+	uri.SetQueryString(u)
+
+	req.SetURI(uri)
+
+	c.headers.CopyTo(&req.Header)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Signature", signature)
+
+	resp := fasthttp.AcquireResponse()
+	defer fasthttp.ReleaseResponse(resp)
+	if err := c.httpClient.Do(req, resp); err != nil {
+		c.lgr.Error(err)
+		return nil, err
+	}
+
+	if resp.StatusCode() >= 400 && resp.StatusCode() < 500 {
+		var errorResponse Response
+		if err := json.Unmarshal(resp.Body(), &errorResponse); err != nil {
+			c.lgr.Error(err)
+			return nil, err
+		}
+
+		c.lgr.Error(errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage())))
+		return nil, errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage()))
+	}
+
+	if resp.StatusCode() >= 500 {
+		return nil, errors.New(fasthttp.StatusMessage(resp.StatusCode()))
+	}
+
+	if resp.StatusCode() != 200 {
+		return nil, errors.New("unexpected status code: " + strconv.Itoa(resp.StatusCode()))
+	}
+
+	if err := json.Unmarshal(resp.Body(), &txResponse); err != nil {
+		c.lgr.Error(err)
+		return nil, err
+	}
+
+	return txResponse.GetData().(*Transaction), nil
+}
+
+// TxSummary fetch summary with given parameters
+func (c *client) TxSummary(summary *Summary) (lastBlockHeight uint64, lastTransaction *Transaction, totalCount uint64, err error) {
+	if !summary.IsValid() {
+		err = errors.New("invalid parameters")
+		return 0, nil, 0, err
+	}
+
+	if summary.ChainName == nil {
+		summary.ChainName = &c.chainName
+	}
+
+	if summary.ChainVersion == nil {
+		summary.ChainVersion = &c.chainVersion
+	}
+
+	req, err := summary.ToRequest()
+	if err != nil {
+		c.lgr.Error(err)
+		return 0, nil, 0, err
+	}
+	defer fasthttp.ReleaseRequest(req)
+
+	uri := fasthttp.AcquireURI()
+	defer fasthttp.ReleaseURI(uri)
+	uri.SetScheme(c.parsedAddr()[0])
+	uri.SetHost(c.parsedAddr()[1])
+	uri.SetPath(summary.URI())
+
+	req.SetURI(uri)
+
+	c.headers.CopyTo(&req.Header)
+	req.Header.Set("Content-Type", "application/json")
+
+	var summaryResponse SummaryResponse
+
+	resp := fasthttp.AcquireResponse()
+	defer fasthttp.ReleaseResponse(resp)
+
+	req.Header.SetMethod(fasthttp.MethodPost)
+	if err = c.httpClient.Do(req, resp); err != nil {
+		c.lgr.Error(err)
+		return 0, nil, 0, err
+	}
+
+	if resp.StatusCode() >= 400 && resp.StatusCode() < 500 {
+		var errorResponse Response
+		if err := json.Unmarshal(resp.Body(), &errorResponse); err != nil {
+			c.lgr.Error(err)
+			return 0, nil, 0, err
+		}
+
+		c.lgr.Error(errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage())))
+		return 0, nil, 0, errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage()))
+	}
+
+	if resp.StatusCode() >= 500 {
+		return 0, nil, 0, errors.New(fasthttp.StatusMessage(resp.StatusCode()))
+	}
+
+	if resp.StatusCode() != 200 {
+		return 0, nil, 0, errors.New("unexpected status code: " + strconv.Itoa(resp.StatusCode()))
+	}
+
+	if err = json.Unmarshal(resp.Body(), &summaryResponse); err != nil {
+		c.lgr.Error(err)
+		return 0, nil, 0, err
+	}
+
+	return summaryResponse.Data.LastBlockHeight, summaryResponse.Data.LastTransaction, summaryResponse.TotalCount, nil
+}
+
+// TxSearch search with given parameters
+func (c *client) TxSearch(search *Search) (txs []*Transaction, totalCount uint64, err error) {
+	if !search.IsValid() {
+		err = errors.New("invalid parameters")
+		c.lgr.Error(err)
+		return nil, 0, err
+	}
+
+	if search.ChainName == nil {
+		search.ChainName = &c.chainName
+	}
+
+	if search.ChainVersion == nil {
+		search.ChainVersion = &c.chainVersion
+	}
+
+	req, err := search.ToRequest()
+	if err != nil {
+		c.lgr.Error(err)
+		return nil, 0, err
+	}
+	defer fasthttp.ReleaseRequest(req)
+
+	c.headers.CopyTo(&req.Header)
+	req.Header.Set("Content-Type", "application/json")
+
+	uri := fasthttp.AcquireURI()
+	defer fasthttp.ReleaseURI(uri)
+	uri.SetScheme(c.parsedAddr()[0])
+	uri.SetHost(c.parsedAddr()[1])
+	uri.SetPath(search.URI())
+
+	req.SetURI(uri)
+
+	var searchResponse SearchResponse
+
+	resp := fasthttp.AcquireResponse()
+	defer fasthttp.ReleaseResponse(resp)
+
+	req.Header.SetMethod(fasthttp.MethodPost)
+	if err = c.httpClient.Do(req, resp); err != nil {
+		c.lgr.Error(err)
+		return nil, 0, err
+	}
+
+	if resp.StatusCode() >= 400 && resp.StatusCode() < 500 {
+		var errorResponse Response
+		if err := json.Unmarshal(resp.Body(), &errorResponse); err != nil {
+			c.lgr.Error(err)
+			return nil, 0, err
+		}
+
+		c.lgr.Error(errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage())))
+		return nil, 0, errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage()))
+	}
+
+	if resp.StatusCode() >= 500 {
+		return nil, 0, errors.New(fasthttp.StatusMessage(resp.StatusCode()))
+	}
+
+	if resp.StatusCode() != 200 {
+		return nil, 0, errors.New("unexpected status code: " + strconv.Itoa(resp.StatusCode()))
+	}
+
+	if err = json.Unmarshal(resp.Body(), &searchResponse); err != nil {
+		c.lgr.Error(err)
+		return nil, 0, err
+	}
+
+	return searchResponse.TXS, searchResponse.TotalCount, nil
+}
+
+func (c *client) Broadcast(id string, version uint32, typ Type, data []byte, senderAddress, recipientAddress string, sign []byte, fee uint64) (*BroadcastResponse, error) {
+	resp, err := c.broadcast(id, version, typ, data, senderAddress, recipientAddress, sign, fee, false, false)
+	if err != nil {
+		c.lgr.Error(err)
+		return nil, err
+	}
+
+	return resp, nil
+}
+
+func (c *client) BroadcastSync(id string, version uint32, typ Type, data []byte, senderAddress, recipientAddress string, sign []byte, fee uint64) (*BroadcastResponse, error) {
+	resp, err := c.broadcast(id, version, typ, data, senderAddress, recipientAddress, sign, fee, false, true)
+	if err != nil {
+		c.lgr.Error(err)
+		return nil, err
+	}
+
+	return resp, nil
+}
+
+func (c *client) BroadcastCommit(id string, version uint32, typ Type, data []byte, senderAddress, recipientAddress string, sign []byte, fee uint64) (*BroadcastResponse, error) {
+	resp, err := c.broadcast(id, version, typ, data, senderAddress, recipientAddress, sign, fee, true, false)
+	if err != nil {
+		c.lgr.Error(err)
+		return nil, err
+	}
+
+	return resp, nil
+}
+
+// Broadcast ...
+func (c *client) broadcast(id string, version uint32, typ Type, data []byte, senderAddress, recipientAddress string, sign []byte, fee uint64, commit, sync bool) (*BroadcastResponse, error) {
+	if !typ.IsValid() {
+		c.lgr.Error("invalid type")
+		return nil, errors.New("invalid type")
+	}
+
+	broadcast := &Broadcast{
+		ID:            id,
+		Version:       version,
+		Type:          typ,
+		SenderAddr:    senderAddress,
+		RecipientAddr: recipientAddress,
+		Data:          data,
+		Sign:          sign,
+		Fee:           fee,
+	}
+
+	req, err := broadcast.ToRequest()
+	if err != nil {
+		c.lgr.Error(err)
+		return nil, err
+	}
+	defer fasthttp.ReleaseRequest(req)
+
+	c.headers.CopyTo(&req.Header)
+	req.Header.Set("Content-Type", "application/json")
+
+	uri := fasthttp.AcquireURI()
+	defer fasthttp.ReleaseURI(uri)
+	uri.SetScheme(c.parsedAddr()[0])
+	uri.SetHost(c.parsedAddr()[1])
+	uri.SetPath(broadcast.URI(commit, sync))
+
+	req.SetURI(uri)
+
+	resp := fasthttp.AcquireResponse()
+	defer fasthttp.ReleaseResponse(resp)
+
+	req.Header.SetMethod(fasthttp.MethodPost)
+	if err = c.httpClient.Do(req, resp); err != nil {
+		c.lgr.Error(err)
+		return nil, err
+	}
+
+	if resp.StatusCode() >= 400 && resp.StatusCode() < 500 {
+		var errorResponse Response
+		if err := json.Unmarshal(resp.Body(), &errorResponse); err != nil {
+			c.lgr.Error(err)
+			return nil, err
+		}
+
+		c.lgr.Error(errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage())))
+		return nil, errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage()))
+	}
+
+	if resp.StatusCode() >= 500 {
+		return nil, errors.New(fasthttp.StatusMessage(resp.StatusCode()))
+	}
+
+	if resp.StatusCode() != 201 {
+		return nil, errors.New("unexpected status code: " + strconv.Itoa(resp.StatusCode()))
+	}
+
+	var broadcastResponse BroadcastResponse
+
+	if err = json.Unmarshal(resp.Body(), &broadcastResponse); err != nil {
+		return nil, err
+	}
+
+	return &broadcastResponse, nil
+}
+
+func (c *client) parsedAddr() []string {
+	uri, _ := url.Parse(c.address)
+	return []string{uri.Scheme, uri.Host}
+}
+
+func (c *client) setStarted(b bool) {
+	c.mut.Lock()
+	c.started = b
+	c.mut.Unlock()
+}
+
+func (c *client) getStarted() bool {
+	return c.started
+}
+
+func (c *client) setConnected(b bool) {
+	c.mut.Lock()
+	c.connected = b
+	c.mut.Unlock()
+}
+
+func (c *client) isConnected() bool {
+	return c.connected
+}
+
+func (c *client) setSubscribed(b bool) {
+	c.mut.Lock()
+	c.subscribed = b
+	c.mut.Unlock()
+}
+
+func (c *client) getSubscribed() bool {
+	return c.subscribed
+}
+
+func (c *client) getConn() *websocket.Conn {
+	return c.conn
+}
+
+func (c *client) getSubscribedAddress() map[string]bool {
+	return c.subscribedAddresses
+}
+
+func (c *client) setSubscribedAddress(v map[string]bool) {
+	c.mut.Lock()
+	c.subscribedAddresses = v
+	c.mut.Unlock()
+}
+
+func (c *client) getSubscribedSignedDatas() map[string]string {
+	return c.subscribedSignedData
+}
+
+func (c *client) setSubscribedSignedDatas(v map[string]string) {
+	c.mut.Lock()
+	c.subscribedSignedData = v
+	c.mut.Unlock()
 }
 
 func (c *client) connect(reconnect bool) (*websocket.Conn, error) {
@@ -404,14 +807,6 @@ func (c *client) readMessage() <-chan Received {
 		}
 	}()
 	return c.receivedCh
-}
-
-func (c *client) Write(b []byte) error {
-	return c.write(sendMsg{
-		typ:        message,
-		messageTyp: websocket.TextMessage,
-		msg:        b,
-	})
 }
 
 func (c *client) write(sm sendMsg) (err error) {
@@ -578,26 +973,15 @@ func (c *client) closeWS() {
 	c.conn = nil
 }
 
-// SetListenCallback Callback that will be called when the WS client captures a
-// transaction event
-func (c *client) SetListenCallback(fn func(transaction *Transaction)) {
-	c.listenCallback = fn
-}
-
-// Subscribe to given addresses
-func (c *client) Subscribe(addresses []string, signedDatas map[string]string, txTypes ...Type) error {
-	return c.subscribe(false, addresses, signedDatas, txTypes...)
-}
-
 func (c *client) subscribe(already bool, addresses []string, signedDatas map[string]string, txTypes ...Type) error {
 	if len(txTypes) > len(TypesSlice) {
 		return errors.New("invalid tx types")
 	}
 
 	tAddresses := make([]string, 0)
-	tSignedDatas := make(map[string]string)
+	tSignedData := make(map[string]string)
 	subscribedAddress := c.getSubscribedAddress()
-	subscribedSignedDatas := c.getSubscribedSignedDatas()
+	subscribedSignedData := c.getSubscribedSignedDatas()
 	if already {
 		if len(subscribedAddress) <= 0 {
 			return nil
@@ -606,12 +990,12 @@ func (c *client) subscribe(already bool, addresses []string, signedDatas map[str
 			tAddresses = append(tAddresses, address)
 		}
 
-		if len(subscribedSignedDatas) == 0 {
+		if len(subscribedSignedData) == 0 {
 			return nil
 		}
 
-		for kk, vv := range subscribedSignedDatas {
-			tSignedDatas[kk] = vv
+		for kk, vv := range subscribedSignedData {
+			tSignedData[kk] = vv
 		}
 	} else {
 		if len(addresses) == 0 {
@@ -631,10 +1015,10 @@ func (c *client) subscribe(already bool, addresses []string, signedDatas map[str
 			tAddresses = newAddress
 		}
 
-		tSignedDatas = signedDatas
+		tSignedData = signedDatas
 	}
 
-	if len(tAddresses) == 0 || len(tSignedDatas) == 0 {
+	if len(tAddresses) == 0 || len(tSignedData) == 0 {
 		return nil
 	}
 
@@ -642,7 +1026,7 @@ func (c *client) subscribe(already bool, addresses []string, signedDatas map[str
 		IsWeb:       false,
 		Type:        Subscribe,
 		Addrs:       tAddresses,
-		SignedAddrs: tSignedDatas,
+		SignedAddrs: tSignedData,
 		TXTypes:     txTypes,
 	}
 
@@ -665,17 +1049,11 @@ func (c *client) subscribe(already bool, addresses []string, signedDatas map[str
 		tmp[tAddresses[i]] = true
 	}
 	c.setSubscribedAddress(tmp)
-	c.setSubscribedSignedDatas(tSignedDatas)
+	c.setSubscribedSignedDatas(tSignedData)
 	c.setSubscribed(true)
 
 	return nil
 }
-
-// Unsubscribe to given addresses
-func (c *client) Unsubscribe() error {
-	return c.unsubscribe(false)
-}
-
 func (c *client) unsubscribe(_ bool) error {
 	if !c.getSubscribed() {
 		return errors.New("client has not yet subscribed")
@@ -712,354 +1090,4 @@ func (c *client) unsubscribe(_ bool) error {
 	c.setSubscribed(false)
 
 	return nil
-}
-
-// LastBlock fetch last block in blockchain network
-func (c *client) LastBlock(chainName, chainVersion *string) (*LastBlock, error) {
-	var lastBlock LastBlock
-
-	u := "limit=1&offset=0"
-	if chainName != nil && chainVersion != nil {
-		u += "&chain_name=" + *chainName + "&chain_version=" + *chainVersion
-	} else {
-		u += "&chain_name=" + c.chainName + "&chain_version=" + c.chainVersion
-	}
-
-	req := fasthttp.AcquireRequest()
-	defer fasthttp.ReleaseRequest(req)
-	c.headers.CopyTo(&req.Header)
-	req.Header.Set("Content-Type", "application/json")
-
-	uri := fasthttp.AcquireURI()
-	defer fasthttp.ReleaseURI(uri)
-	uri.SetScheme(c.parsedAddr()[0])
-	uri.SetHost(c.parsedAddr()[1])
-	uri.SetPath("/v1/blocks")
-	uri.SetQueryString(u)
-
-	req.SetURI(uri)
-
-	resp := fasthttp.AcquireResponse()
-	defer fasthttp.ReleaseResponse(resp)
-	if err := c.httpClient.Do(req, resp); err != nil {
-		c.lgr.Error(err)
-		return nil, err
-	}
-
-	if resp.StatusCode() != 200 {
-		if resp.StatusCode() < 500 {
-			var errorResponse Response
-			if err := json.Unmarshal(resp.Body(), &errorResponse); err != nil {
-				c.lgr.Error(err)
-				return nil, err
-			}
-
-			c.lgr.Error(errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage())))
-			return nil, errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage()))
-		}
-
-		return nil, errors.New(fasthttp.StatusMessage(resp.StatusCode()))
-	}
-
-	if err := json.Unmarshal(resp.Body(), &lastBlock); err != nil {
-		c.lgr.Error(err)
-		return nil, err
-	}
-
-	return &lastBlock, nil
-}
-
-func (c *client) Tx(id string, signature string, chainName, chainVersion *string) (*Transaction, error) {
-	if id == "" {
-		return nil, errors.New("invalid tx id")
-	}
-
-	var txResponse Response
-	txResponse.Data = &Transaction{}
-
-	u := ""
-	if chainName != nil && chainVersion != nil {
-		u += "chain_name=" + *chainName + "&chain_version=" + *chainVersion
-	} else {
-		u += "chain_name=" + c.chainName + "&chain_version=" + c.chainVersion
-	}
-
-	req := fasthttp.AcquireRequest()
-	defer fasthttp.ReleaseRequest(req)
-
-	uri := fasthttp.AcquireURI()
-	defer fasthttp.ReleaseURI(uri)
-	uri.SetScheme(c.parsedAddr()[0])
-	uri.SetHost(c.parsedAddr()[1])
-	uri.SetPath("/v1/tx/" + id)
-	uri.SetQueryString(u)
-
-	req.SetURI(uri)
-
-	c.headers.CopyTo(&req.Header)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Signature", signature)
-
-	resp := fasthttp.AcquireResponse()
-	defer fasthttp.ReleaseResponse(resp)
-	if err := c.httpClient.Do(req, resp); err != nil {
-		c.lgr.Error(err)
-		return nil, err
-	}
-
-	if resp.StatusCode() != 200 {
-		if resp.StatusCode() < 500 {
-			var errorResponse Response
-			if err := json.Unmarshal(resp.Body(), &errorResponse); err != nil {
-				c.lgr.Error(err)
-				return nil, err
-			}
-
-			c.lgr.Error(errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage())))
-			return nil, errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage()))
-		}
-
-		return nil, errors.New(fasthttp.StatusMessage(resp.StatusCode()))
-	}
-
-	if err := json.Unmarshal(resp.Body(), &txResponse); err != nil {
-		c.lgr.Error(err)
-		return nil, err
-	}
-
-	return txResponse.GetData().(*Transaction), nil
-}
-
-// TxSummary fetch summary with given parameters
-func (c *client) TxSummary(summary *Summary) (lastBlockHeight uint64, lastTransaction *Transaction, totalCount uint64, err error) {
-	if !summary.IsValid() {
-		err = errors.New("invalid parameters")
-		return 0, nil, 0, err
-	}
-
-	if summary.ChainName == nil {
-		summary.ChainName = &c.chainName
-	}
-
-	if summary.ChainVersion == nil {
-		summary.ChainVersion = &c.chainVersion
-	}
-
-	req, err := summary.ToRequest()
-	if err != nil {
-		c.lgr.Error(err)
-		return 0, nil, 0, err
-	}
-	defer fasthttp.ReleaseRequest(req)
-
-	uri := fasthttp.AcquireURI()
-	defer fasthttp.ReleaseURI(uri)
-	uri.SetScheme(c.parsedAddr()[0])
-	uri.SetHost(c.parsedAddr()[1])
-	uri.SetPath(summary.URI())
-
-	req.SetURI(uri)
-
-	c.headers.CopyTo(&req.Header)
-	req.Header.Set("Content-Type", "application/json")
-
-	var summaryResponse SummaryResponse
-
-	resp := fasthttp.AcquireResponse()
-	defer fasthttp.ReleaseResponse(resp)
-
-	req.Header.SetMethod(fasthttp.MethodPost)
-	if err = c.httpClient.Do(req, resp); err != nil {
-		c.lgr.Error(err)
-		return 0, nil, 0, err
-	}
-
-	if resp.StatusCode() != 200 {
-		if resp.StatusCode() < 500 {
-			var errorResponse Response
-			if err = json.Unmarshal(resp.Body(), &errorResponse); err != nil {
-				c.lgr.Error(err)
-				return 0, nil, 0, err
-			}
-
-			c.lgr.Error(errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage())))
-			return 0, nil, 0, errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage()))
-		}
-
-		return 0, nil, 0, errors.New(fasthttp.StatusMessage(resp.StatusCode()))
-	}
-
-	if err = json.Unmarshal(resp.Body(), &summaryResponse); err != nil {
-		c.lgr.Error(err)
-		return 0, nil, 0, err
-	}
-
-	return summaryResponse.Data.LastBlockHeight, summaryResponse.Data.LastTransaction, summaryResponse.TotalCount, nil
-}
-
-// TxSearch search with given parameters
-func (c *client) TxSearch(search *Search) (txs []*Transaction, totalCount uint64, err error) {
-	if !search.IsValid() {
-		err = errors.New("invalid parameters")
-		c.lgr.Error(err)
-		return nil, 0, err
-	}
-
-	if search.ChainName == nil {
-		search.ChainName = &c.chainName
-	}
-
-	if search.ChainVersion == nil {
-		search.ChainVersion = &c.chainVersion
-	}
-
-	req, err := search.ToRequest()
-	if err != nil {
-		c.lgr.Error(err)
-		return nil, 0, err
-	}
-	defer fasthttp.ReleaseRequest(req)
-
-	c.headers.CopyTo(&req.Header)
-	req.Header.Set("Content-Type", "application/json")
-
-	uri := fasthttp.AcquireURI()
-	defer fasthttp.ReleaseURI(uri)
-	uri.SetScheme(c.parsedAddr()[0])
-	uri.SetHost(c.parsedAddr()[1])
-	uri.SetPath(search.URI())
-
-	req.SetURI(uri)
-
-	var searchResponse SearchResponse
-
-	resp := fasthttp.AcquireResponse()
-	defer fasthttp.ReleaseResponse(resp)
-
-	req.Header.SetMethod(fasthttp.MethodPost)
-	if err = c.httpClient.Do(req, resp); err != nil {
-		c.lgr.Error(err)
-		return nil, 0, err
-	}
-
-	if resp.StatusCode() != 200 {
-		if resp.StatusCode() < 500 {
-			var errorResponse Response
-			if err = json.Unmarshal(resp.Body(), &errorResponse); err != nil {
-				c.lgr.Error(err)
-				return nil, 0, err
-			}
-
-			c.lgr.Error(errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage())))
-			return nil, 0, errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage()))
-		}
-
-		return nil, 0, errors.New(fasthttp.StatusMessage(resp.StatusCode()))
-	}
-
-	if err = json.Unmarshal(resp.Body(), &searchResponse); err != nil {
-		c.lgr.Error(err)
-		return nil, 0, err
-	}
-
-	return searchResponse.TXS, searchResponse.TotalCount, nil
-}
-
-func (c *client) Broadcast(id string, version uint32, typ Type, data []byte, senderAddress, recipientAddress string, sign []byte, fee uint64) (*BroadcastResponse, error) {
-	resp, err := c.broadcast(id, version, typ, data, senderAddress, recipientAddress, sign, fee, false, false)
-	if err != nil {
-		c.lgr.Error(err)
-		return nil, err
-	}
-
-	return resp, nil
-}
-
-func (c *client) BroadcastSync(id string, version uint32, typ Type, data []byte, senderAddress, recipientAddress string, sign []byte, fee uint64) (*BroadcastResponse, error) {
-	resp, err := c.broadcast(id, version, typ, data, senderAddress, recipientAddress, sign, fee, false, true)
-	if err != nil {
-		c.lgr.Error(err)
-		return nil, err
-	}
-
-	return resp, nil
-}
-
-func (c *client) BroadcastCommit(id string, version uint32, typ Type, data []byte, senderAddress, recipientAddress string, sign []byte, fee uint64) (*BroadcastResponse, error) {
-	resp, err := c.broadcast(id, version, typ, data, senderAddress, recipientAddress, sign, fee, true, false)
-	if err != nil {
-		c.lgr.Error(err)
-		return nil, err
-	}
-
-	return resp, nil
-}
-
-// Broadcast ...
-func (c *client) broadcast(id string, version uint32, typ Type, data []byte, senderAddress, recipientAddress string, sign []byte, fee uint64, commit, sync bool) (*BroadcastResponse, error) {
-	if !typ.IsValid() {
-		c.lgr.Error("invalid type")
-		return nil, errors.New("invalid type")
-	}
-
-	broadcast := &Broadcast{
-		ID:            id,
-		Version:       version,
-		Type:          typ,
-		SenderAddr:    senderAddress,
-		RecipientAddr: recipientAddress,
-		Data:          data,
-		Sign:          sign,
-		Fee:           fee,
-	}
-
-	req, err := broadcast.ToRequest()
-	if err != nil {
-		c.lgr.Error(err)
-		return nil, err
-	}
-	defer fasthttp.ReleaseRequest(req)
-
-	c.headers.CopyTo(&req.Header)
-	req.Header.Set("Content-Type", "application/json")
-
-	uri := fasthttp.AcquireURI()
-	defer fasthttp.ReleaseURI(uri)
-	uri.SetScheme(c.parsedAddr()[0])
-	uri.SetHost(c.parsedAddr()[1])
-	uri.SetPath(broadcast.URI(commit, sync))
-
-	req.SetURI(uri)
-
-	resp := fasthttp.AcquireResponse()
-	defer fasthttp.ReleaseResponse(resp)
-
-	req.Header.SetMethod(fasthttp.MethodPost)
-	if err = c.httpClient.Do(req, resp); err != nil {
-		c.lgr.Error(err)
-		return nil, err
-	}
-
-	if resp.StatusCode() != 201 {
-		if resp.StatusCode() < 500 {
-			var errorResponse Response
-			if err = json.Unmarshal(resp.Body(), &errorResponse); err != nil {
-				c.lgr.Error(err)
-				return nil, err
-			}
-
-			c.lgr.Error(errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage())))
-			return nil, errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage()))
-		}
-
-		return nil, errors.New(fasthttp.StatusMessage(resp.StatusCode()))
-	}
-
-	var broadcastResponse BroadcastResponse
-
-	if err = json.Unmarshal(resp.Body(), &broadcastResponse); err != nil {
-		return nil, err
-	}
-
-	return &broadcastResponse, nil
 }
