@@ -20,19 +20,6 @@ import "time"
 
 type Type string
 
-func (t Type) IsValid() bool {
-	valid := false
-
-	for i := 0; i < len(TypesSlice); i++ {
-		if TypesSlice[i] == t {
-			valid = true
-			break
-		}
-	}
-
-	return valid
-}
-
 const (
 	TypeMaster                Type = "initial_storage"
 	TypeAddress               Type = "interim_storage"
@@ -85,6 +72,19 @@ const (
 	TypePasswdDataV2          Type = "pwdd"
 	TypePasswdDataV2Policy    Type = "pwdd_policy"
 )
+
+func (t Type) IsValid() bool {
+	valid := false
+
+	for i := 0; i < len(TypesSlice); i++ {
+		if TypesSlice[i] == t {
+			valid = true
+			break
+		}
+	}
+
+	return valid
+}
 
 var TypesSlice = []Type{
 	TypeMaster,
@@ -141,19 +141,21 @@ var TypesSlice = []Type{
 
 // Transaction read node transaction model
 type Transaction struct {
-	Order         *uint64     `json:"order,omitempty"`
-	ID            interface{} `json:"id"`
-	Height        uint64      `json:"height"`
-	Identifier    string      `json:"identifier"`
-	Version       uint        `json:"version"`
-	Typ           Type        `json:"typ"`
-	SenderAddr    string      `json:"sender_addr"`
-	RecipientAddr string      `json:"recipient_addr"`
-	Data          Bytea       `json:"data"`
-	Sign          Bytea       `json:"sign"`
-	Fee           uint64      `json:"fee"`
-	Hash          string      `json:"hash"`
-	InsertedAt    time.Time   `json:"inserted_at"`
+	Order          *uint64     `json:"order,omitempty"`
+	ID             interface{} `json:"id"`
+	Height         uint64      `json:"height"`
+	Identifier     string      `json:"identifier"`
+	Version        uint        `json:"version"`
+	Typ            Type        `json:"typ"`
+	SenderAddr     string      `json:"sender_addr"`
+	RecipientAddr  string      `json:"recipient_addr"`
+	Data           Bytea       `json:"data"`
+	AdditionalData *Bytea      `json:"additional_data,omitempty"`
+	CipherData     *Bytea      `json:"cipher_data,omitempty"`
+	Sign           Bytea       `json:"sign"`
+	Fee            uint64      `json:"fee"`
+	Hash           string      `json:"hash"`
+	InsertedAt     time.Time   `json:"inserted_at"`
 }
 
 // Bytea transaction byte data
