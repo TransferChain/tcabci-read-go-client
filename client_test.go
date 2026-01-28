@@ -18,7 +18,7 @@ var (
 	ctx               = context.Background()
 	readNodeAddress   = "https://test-read-node-01.transferchain.io"
 	readNodeWSAddress = "wss://test-read-node-01.transferchain.io/ws"
-	chainName         = "medusa"
+	chainName         = "medusa-testnet"
 	chainVersion      = "v2"
 )
 
@@ -382,6 +382,8 @@ func TestShouldErrorTxBroadcast(t *testing.T) {
 		0,
 		TypeTransfer,
 		[]byte("1"),
+		nil,
+		nil,
 		"address",
 		"address",
 		[]byte("1"),
