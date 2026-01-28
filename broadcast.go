@@ -7,14 +7,16 @@ import (
 )
 
 type Broadcast struct {
-	ID            string `json:"id"` //Hash of the transaction
-	Version       uint32 `json:"version"`
-	Type          Type   `json:"type"`
-	SenderAddr    string `json:"sender_addr"`
-	RecipientAddr string `json:"recipient_addr"`
-	Data          []byte `json:"data"`
-	Sign          []byte `json:"sign"`
-	Fee           uint64 `json:"fee"`
+	ID             string  `json:"id"` //Hash of the transaction
+	Version        uint32  `json:"version"`
+	Type           Type    `json:"type"`
+	SenderAddr     string  `json:"sender_addr"`
+	RecipientAddr  string  `json:"recipient_addr"`
+	Data           []byte  `json:"data"`
+	AdditionalData *[]byte `json:"additional_data,omitempty"`
+	CipherData     *[]byte `json:"cipher_data,omitempty"`
+	Sign           []byte  `json:"sign"`
+	Fee            uint64  `json:"fee"`
 }
 
 func (b *Broadcast) URI(commit, sync bool) string {

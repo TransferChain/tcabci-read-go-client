@@ -77,9 +77,9 @@ type Client interface {
 	Tx(id string, signature string, chainName, chainVersion *string) (*Transaction, error)
 	TxSummary(summary *Summary) (lastBlockHeight uint64, lastTransaction *Transaction, totalCount uint64, err error)
 	TxSearch(search *Search) (txs []*Transaction, totalCount uint64, err error)
-	Broadcast(id string, version uint32, typ Type, data []byte, senderAddress, recipientAddress string, sign []byte, fee uint64) (*BroadcastResponse, error)
-	BroadcastSync(id string, version uint32, typ Type, data []byte, senderAddress, recipientAddress string, sign []byte, fee uint64) (*BroadcastResponse, error)
-	BroadcastCommit(id string, version uint32, typ Type, data []byte, senderAddress, recipientAddress string, sign []byte, fee uint64) (*BroadcastResponse, error)
+	Broadcast(id string, version uint32, typ Type, data []byte, additionalData, cipherData *[]byte, senderAddress, recipientAddress string, sign []byte, fee uint64) (*BroadcastResponse, error)
+	BroadcastSync(id string, version uint32, typ Type, data []byte, additionalData, cipherData *[]byte, senderAddress, recipientAddress string, sign []byte, fee uint64) (*BroadcastResponse, error)
+	BroadcastCommit(id string, version uint32, typ Type, data []byte, additionalData, cipherData *[]byte, senderAddress, recipientAddress string, sign []byte, fee uint64) (*BroadcastResponse, error)
 }
 
 type client struct {
@@ -159,7 +159,7 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 
 	c := &client{
 		ctx:                 ctx,
-		version:             "1.6.5",
+		version:             "1.6.6",
 		lgr:                 NewLogger(ctx),
 		address:             address,
 		wsAddress:           wsAddress,
@@ -575,8 +575,8 @@ func (c *client) TxSearch(search *Search) (txs []*Transaction, totalCount uint64
 	return searchResponse.TXS, searchResponse.TotalCount, nil
 }
 
-func (c *client) Broadcast(id string, version uint32, typ Type, data []byte, senderAddress, recipientAddress string, sign []byte, fee uint64) (*BroadcastResponse, error) {
-	resp, err := c.broadcast(id, version, typ, data, senderAddress, recipientAddress, sign, fee, false, false)
+func (c *client) Broadcast(id string, version uint32, typ Type, data []byte, additionalData, cipherData *[]byte, senderAddress, recipientAddress string, sign []byte, fee uint64) (*BroadcastResponse, error) {
+	resp, err := c.broadcast(id, version, typ, data, additionalData, cipherData, senderAddress, recipientAddress, sign, fee, false, false)
 	if err != nil {
 		c.lgr.Error(err)
 		return nil, err
@@ -585,8 +585,8 @@ func (c *client) Broadcast(id string, version uint32, typ Type, data []byte, sen
 	return resp, nil
 }
 
-func (c *client) BroadcastSync(id string, version uint32, typ Type, data []byte, senderAddress, recipientAddress string, sign []byte, fee uint64) (*BroadcastResponse, error) {
-	resp, err := c.broadcast(id, version, typ, data, senderAddress, recipientAddress, sign, fee, false, true)
+func (c *client) BroadcastSync(id string, version uint32, typ Type, data []byte, additionalData, cipherData *[]byte, senderAddress, recipientAddress string, sign []byte, fee uint64) (*BroadcastResponse, error) {
+	resp, err := c.broadcast(id, version, typ, data, additionalData, cipherData, senderAddress, recipientAddress, sign, fee, false, true)
 	if err != nil {
 		c.lgr.Error(err)
 		return nil, err
@@ -595,8 +595,8 @@ func (c *client) BroadcastSync(id string, version uint32, typ Type, data []byte,
 	return resp, nil
 }
 
-func (c *client) BroadcastCommit(id string, version uint32, typ Type, data []byte, senderAddress, recipientAddress string, sign []byte, fee uint64) (*BroadcastResponse, error) {
-	resp, err := c.broadcast(id, version, typ, data, senderAddress, recipientAddress, sign, fee, true, false)
+func (c *client) BroadcastCommit(id string, version uint32, typ Type, data []byte, additionalData, cipherData *[]byte, senderAddress, recipientAddress string, sign []byte, fee uint64) (*BroadcastResponse, error) {
+	resp, err := c.broadcast(id, version, typ, data, additionalData, cipherData, senderAddress, recipientAddress, sign, fee, true, false)
 	if err != nil {
 		c.lgr.Error(err)
 		return nil, err
@@ -606,21 +606,23 @@ func (c *client) BroadcastCommit(id string, version uint32, typ Type, data []byt
 }
 
 // Broadcast ...
-func (c *client) broadcast(id string, version uint32, typ Type, data []byte, senderAddress, recipientAddress string, sign []byte, fee uint64, commit, sync bool) (*BroadcastResponse, error) {
+func (c *client) broadcast(id string, version uint32, typ Type, data []byte, additionalData, cipherData *[]byte, senderAddress, recipientAddress string, sign []byte, fee uint64, commit, sync bool) (*BroadcastResponse, error) {
 	if !typ.IsValid() {
 		c.lgr.Error("invalid type")
 		return nil, errors.New("invalid type")
 	}
 
 	broadcast := &Broadcast{
-		ID:            id,
-		Version:       version,
-		Type:          typ,
-		SenderAddr:    senderAddress,
-		RecipientAddr: recipientAddress,
-		Data:          data,
-		Sign:          sign,
-		Fee:           fee,
+		ID:             id,
+		Version:        version,
+		Type:           typ,
+		SenderAddr:     senderAddress,
+		RecipientAddr:  recipientAddress,
+		Data:           data,
+		AdditionalData: additionalData,
+		CipherData:     cipherData,
+		Sign:           sign,
+		Fee:            fee,
 	}
 
 	req, err := broadcast.ToRequest()
