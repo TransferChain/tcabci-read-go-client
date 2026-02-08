@@ -80,6 +80,7 @@ type Client interface {
 	Broadcast(id string, version uint32, typ Type, data []byte, additionalData, cipherData *[]byte, senderAddress, recipientAddress string, sign []byte, fee uint64) (*BroadcastResponse, error)
 	BroadcastSync(id string, version uint32, typ Type, data []byte, additionalData, cipherData *[]byte, senderAddress, recipientAddress string, sign []byte, fee uint64) (*BroadcastResponse, error)
 	BroadcastCommit(id string, version uint32, typ Type, data []byte, additionalData, cipherData *[]byte, senderAddress, recipientAddress string, sign []byte, fee uint64) (*BroadcastResponse, error)
+	Query(method string, path string, data []byte) (*Response, error)
 }
 
 type client struct {
@@ -159,7 +160,7 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 
 	c := &client{
 		ctx:                 ctx,
-		version:             "1.6.7",
+		version:             "1.6.8",
 		lgr:                 NewLogger(ctx),
 		address:             address,
 		wsAddress:           wsAddress,
@@ -603,6 +604,63 @@ func (c *client) BroadcastCommit(id string, version uint32, typ Type, data []byt
 	}
 
 	return resp, nil
+}
+
+func (c *client) Query(method string, path string, data []byte) (*Response, error) {
+	if e, _, _ := InArray(method, []string{fasthttp.MethodGet, fasthttp.MethodPost}); !e {
+		return nil, errors.New("invalid method")
+	}
+
+	var err error
+	req := fasthttp.AcquireRequest()
+	defer fasthttp.ReleaseRequest(req)
+
+	c.headers.CopyTo(&req.Header)
+	req.Header.Set("Content-Type", "application/json")
+
+	uri := fasthttp.AcquireURI()
+	defer fasthttp.ReleaseURI(uri)
+	uri.SetScheme(c.parsedAddr()[0])
+	uri.SetHost(c.parsedAddr()[1])
+	uri.SetPath(path)
+
+	req.SetURI(uri)
+
+	resp := fasthttp.AcquireResponse()
+	defer fasthttp.ReleaseResponse(resp)
+
+	req.Header.SetMethod(method)
+	if err = c.httpClient.Do(req, resp); err != nil {
+		c.lgr.Error(err)
+		return nil, err
+	}
+
+	if resp.StatusCode() >= 400 && resp.StatusCode() < 500 {
+		var errorResponse Response
+		if err := json.Unmarshal(resp.Body(), &errorResponse); err != nil {
+			c.lgr.Error(err)
+			return nil, err
+		}
+
+		c.lgr.Error(errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage())))
+		return nil, errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage()))
+	}
+
+	if resp.StatusCode() >= 500 {
+		return nil, errors.New(fasthttp.StatusMessage(resp.StatusCode()))
+	}
+
+	if resp.StatusCode() < 200 || resp.StatusCode() > 300 {
+		return nil, errors.New("unexpected status code: " + strconv.Itoa(resp.StatusCode()))
+	}
+
+	var response Response
+	if err = json.Unmarshal(resp.Body(), &response); err != nil {
+		c.lgr.Error(err)
+		return nil, err
+	}
+
+	return &response, nil
 }
 
 // Broadcast ...
