@@ -160,7 +160,7 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 
 	c := &client{
 		ctx:                 ctx,
-		version:             "1.6.8",
+		version:             "1.6.9",
 		lgr:                 NewLogger(ctx),
 		address:             address,
 		wsAddress:           wsAddress,
@@ -620,11 +620,15 @@ func (c *client) Query(method string, path string, data []byte) (*Response, erro
 
 	uri := fasthttp.AcquireURI()
 	defer fasthttp.ReleaseURI(uri)
+
 	uri.SetScheme(c.parsedAddr()[0])
 	uri.SetHost(c.parsedAddr()[1])
 	uri.SetPath(path)
-
 	req.SetURI(uri)
+
+	if data != nil {
+		req.SetBody(data)
+	}
 
 	resp := fasthttp.AcquireResponse()
 	defer fasthttp.ReleaseResponse(resp)
