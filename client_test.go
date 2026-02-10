@@ -394,6 +394,19 @@ func TestShouldErrorTxBroadcast(t *testing.T) {
 	assert.Nil(t, err)
 }
 
+func TestFetchNS(t *testing.T) {
+	readNodeClient, err := NewClientContext(ctx, readNodeAddress, readNodeWSAddress, chainName, chainVersion)
+	assert.Nil(t, err)
+	_, _ = readNodeClient.SetVerbose(true)
+	err = readNodeClient.Start()
+	assert.Nil(t, err)
+
+	ns, err := readNodeClient.FetchNS("019c469e-ef3f-7a4b-a9d8-885351998bb9")
+	assert.Nil(t, err)
+	assert.NotNil(t, ns)
+	assert.GreaterOrEqual(t, len(ns.PublicIDs), 6)
+}
+
 func BenchmarkNewClientContext(b *testing.B) {
 	for n := 0; n < b.N; n++ {
 		newTestClient(b, 3)
