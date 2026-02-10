@@ -80,6 +80,7 @@ type Client interface {
 	Broadcast(id string, version uint32, typ Type, data []byte, additionalData, cipherData *[]byte, senderAddress, recipientAddress string, sign []byte, fee uint64) (*BroadcastResponse, error)
 	BroadcastSync(id string, version uint32, typ Type, data []byte, additionalData, cipherData *[]byte, senderAddress, recipientAddress string, sign []byte, fee uint64) (*BroadcastResponse, error)
 	BroadcastCommit(id string, version uint32, typ Type, data []byte, additionalData, cipherData *[]byte, senderAddress, recipientAddress string, sign []byte, fee uint64) (*BroadcastResponse, error)
+	FetchNS(identifier string) (*NS, error)
 	Query(method string, path string, data []byte) (*Response, error)
 }
 
@@ -667,7 +668,60 @@ func (c *client) Query(method string, path string, data []byte) (*Response, erro
 	return &response, nil
 }
 
-// Broadcast ...
+func (c *client) FetchNS(identifier string) (*NS, error) {
+	var err error
+	req := fasthttp.AcquireRequest()
+	defer fasthttp.ReleaseRequest(req)
+
+	c.headers.CopyTo(&req.Header)
+	req.Header.Set("Content-Type", "application/json")
+
+	uri := fasthttp.AcquireURI()
+	defer fasthttp.ReleaseURI(uri)
+
+	uri.SetScheme(c.parsedAddr()[0])
+	uri.SetHost(c.parsedAddr()[1])
+	uri.SetPath("/v1/ns/" + identifier)
+	req.SetURI(uri)
+
+	resp := fasthttp.AcquireResponse()
+	defer fasthttp.ReleaseResponse(resp)
+
+	req.Header.SetMethod(fasthttp.MethodGet)
+	if err = c.httpClient.Do(req, resp); err != nil {
+		c.lgr.Error(err)
+		return nil, err
+	}
+
+	if resp.StatusCode() >= 400 && resp.StatusCode() < 500 {
+		var errorResponse Response
+		if err := json.Unmarshal(resp.Body(), &errorResponse); err != nil {
+			c.lgr.Error(err)
+			return nil, err
+		}
+
+		c.lgr.Error(errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage())))
+		return nil, errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage()))
+	}
+
+	if resp.StatusCode() >= 500 {
+		return nil, errors.New(fasthttp.StatusMessage(resp.StatusCode()))
+	}
+
+	if resp.StatusCode() != 200 {
+		return nil, errors.New("unexpected status code: " + strconv.Itoa(resp.StatusCode()))
+	}
+
+	var response Response
+	response.Data = &NS{}
+	if err = json.Unmarshal(resp.Body(), &response); err != nil {
+		c.lgr.Error(err)
+		return nil, err
+	}
+
+	return response.Data.(*NS), nil
+}
+
 func (c *client) broadcast(id string, version uint32, typ Type, data []byte, additionalData, cipherData *[]byte, senderAddress, recipientAddress string, sign []byte, fee uint64, commit, sync bool) (*BroadcastResponse, error) {
 	if !typ.IsValid() {
 		c.lgr.Error("invalid type")
