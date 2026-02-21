@@ -22,3 +22,4 @@ vendor/
 thumbs.db
 
 *_test.go
+test/*
