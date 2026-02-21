@@ -20,3 +20,5 @@ vendor/
 # ..
 .DS_Store
 thumbs.db
+
+*_test.go
