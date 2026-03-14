@@ -11,7 +11,7 @@ const (
 	fingerprint = "dfb514f8d8d8add853dc4f88351b6af64acfb9b8faa3e65fa65de8004e284624"
 )
 
-func verifyPeer(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+func verifyPeer(rawCerts [][]byte, _ [][]*x509.Certificate, customFingerprint *string) error {
 	var fingerprints []string
 	for i := 0; i < len(rawCerts); i++ {
 		ci, err := x509.ParseCertificate(rawCerts[i])
@@ -24,7 +24,7 @@ func verifyPeer(rawCerts [][]byte, _ [][]*x509.Certificate) error {
 	}
 
 	for i := 0; i < len(fingerprints); i++ {
-		if fingerprints[i] == fingerprint {
+		if (customFingerprint != nil && *customFingerprint == fingerprints[i]) || fingerprints[i] == fingerprint {
 			return nil
 		}
 	}
