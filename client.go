@@ -47,9 +47,10 @@ const (
 	// Time allowed to read the next pong message from the peer.
 	pongWait = 10 * time.Second
 	// Send pings to peer with this period. Must be less than pongWait.
-	pingPeriod       = (pongWait * 9) / 10
-	HandshakeTimeout = 7 * time.Second
-	writeTimeout     = 15 * time.Millisecond
+	pingPeriod           = (pongWait * 9) / 10
+	HandshakeTimeout     = 7 * time.Second
+	writeTimeout         = 15 * time.Millisecond
+	connectionErrorLimit = 64
 )
 
 type typ int
@@ -95,6 +96,7 @@ type client struct {
 	wsAddress            string
 	chainName            string
 	chainVersion         string
+	customFingerprint    *string
 	url                  *url.URL
 	wsURL                *url.URL
 	headers              fasthttp.RequestHeader
@@ -105,6 +107,7 @@ type client struct {
 	started              bool
 	handshakeTimeout     time.Duration
 	listenCallback       func(transaction *Transaction)
+	errorCount           int32
 	subscribedAddresses  map[string]bool
 	subscribedSignedData map[string]string
 	listenCtx            context.Context
@@ -124,16 +127,16 @@ type sendMsg struct {
 }
 
 // NewClient make ws client
-func NewClient(address string, wsAddress string, chainName, chainVersion string) (Client, error) {
-	return newClient(context.Background(), address, wsAddress, chainName, chainVersion)
+func NewClient(address string, wsAddress string, chainName, chainVersion string, customFingerprint *string) (Client, error) {
+	return newClient(context.Background(), address, wsAddress, chainName, chainVersion, customFingerprint)
 }
 
 // NewClientContext make ws client with context
-func NewClientContext(ctx context.Context, address string, wsAddress string, chainName, chainVersion string) (Client, error) {
-	return newClient(ctx, address, wsAddress, chainName, chainVersion)
+func NewClientContext(ctx context.Context, address string, wsAddress string, chainName, chainVersion string, customFingerprint *string) (Client, error) {
+	return newClient(ctx, address, wsAddress, chainName, chainVersion, customFingerprint)
 }
 
-func newClient(ctx context.Context, address string, wsAddress string, chainName, chainVersion string) (Client, error) {
+func newClient(ctx context.Context, address string, wsAddress string, chainName, chainVersion string, customFingerprint *string) (Client, error) {
 	aURL, err := url.Parse(address)
 	if err != nil {
 		return nil, err
@@ -169,13 +172,16 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 		chainVersion:        chainVersion,
 		url:                 aURL,
 		wsURL:               wsURL,
+		customFingerprint:   customFingerprint,
 		subscribedAddresses: make(map[string]bool),
 		handshakeTimeout:    HandshakeTimeout,
 		dialer: &websocket.Dialer{
 			TLSClientConfig: &tls.Config{
-				RootCAs:               pool,
-				InsecureSkipVerify:    false,
-				VerifyPeerCertificate: verifyPeer,
+				RootCAs:            pool,
+				InsecureSkipVerify: false,
+				VerifyPeerCertificate: func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
+					return verifyPeer(rawCerts, verifiedChains, customFingerprint)
+				},
 			},
 			HandshakeTimeout:  HandshakeTimeout,
 			ReadBufferSize:    5 * 1024 * 1024,
@@ -198,7 +204,7 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 		},
 	}
 
-	trn, err := newTransport(pool, false)
+	trn, err := newTransport(pool, false, customFingerprint)
 	if err != nil {
 		return nil, err
 	}
@@ -233,7 +239,7 @@ func (c *client) SetVerbose(v bool) (Client, error) {
 		return nil, err
 	}
 
-	trn, err := newTransport(pool, v)
+	trn, err := newTransport(pool, v, c.customFingerprint)
 	if err != nil {
 		return nil, err
 	}
@@ -858,6 +864,10 @@ func (c *client) setSubscribedSignedDatas(v map[string]string) {
 func (c *client) connect(reconnect bool) (*websocket.Conn, error) {
 	if c.getConn() != nil {
 		return c.getConn(), nil
+	}
+
+	if c.errorCount > connectionErrorLimit {
+		return nil, errors.New("too many connection attempts")
 	}
 
 	ticker := time.NewTicker(time.Second)
