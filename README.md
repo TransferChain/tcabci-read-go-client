@@ -24,7 +24,7 @@ import (
 )
 
 func main() {
-	readNodeClient, _ := tcabcireadgoclient.NewClient("https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws", "medusa", "v2")
+	readNodeClient, _ := tcabcireadgoclient.NewClient("https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws", "medusa", "v2", false, nil)
 
 	if err := readNodeClient.Start(); err != nil {
 		log.Fatal(err)
@@ -34,8 +34,12 @@ func main() {
 		"<your-public-address-one>",
 		"<your-public-address-two>",
 	}
+	signedData := map[string]string{
+		"<your-public-address-one>": "<signature>",
+		"<your-public-address-two>": "<signature>",
+    }
 
-	if err := readNodeClient.Subscribe(addresses); err != nil {
+	if err := readNodeClient.Subscribe(addresses, signedData); err != nil {
 		log.Fatal(err)
 	}
 

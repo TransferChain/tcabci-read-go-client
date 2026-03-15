@@ -97,6 +97,7 @@ type client struct {
 	chainName            string
 	chainVersion         string
 	customFingerprint    *string
+	insecureSkipVerify   bool
 	url                  *url.URL
 	wsURL                *url.URL
 	headers              fasthttp.RequestHeader
@@ -127,16 +128,16 @@ type sendMsg struct {
 }
 
 // NewClient make ws client
-func NewClient(address string, wsAddress string, chainName, chainVersion string, customFingerprint *string) (Client, error) {
-	return newClient(context.Background(), address, wsAddress, chainName, chainVersion, customFingerprint)
+func NewClient(address string, wsAddress string, chainName, chainVersion string, insecure bool, customFingerprint *string) (Client, error) {
+	return newClient(context.Background(), address, wsAddress, chainName, chainVersion, insecure, customFingerprint)
 }
 
 // NewClientContext make ws client with context
-func NewClientContext(ctx context.Context, address string, wsAddress string, chainName, chainVersion string, customFingerprint *string) (Client, error) {
-	return newClient(ctx, address, wsAddress, chainName, chainVersion, customFingerprint)
+func NewClientContext(ctx context.Context, address string, wsAddress string, chainName, chainVersion string, insecure bool, customFingerprint *string) (Client, error) {
+	return newClient(ctx, address, wsAddress, chainName, chainVersion, insecure, customFingerprint)
 }
 
-func newClient(ctx context.Context, address string, wsAddress string, chainName, chainVersion string, customFingerprint *string) (Client, error) {
+func newClient(ctx context.Context, address string, wsAddress string, chainName, chainVersion string, insecure bool, customFingerprint *string) (Client, error) {
 	aURL, err := url.Parse(address)
 	if err != nil {
 		return nil, err
@@ -164,7 +165,7 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 
 	c := &client{
 		ctx:                 ctx,
-		version:             "1.6.12",
+		version:             "1.6.13",
 		lgr:                 NewLogger(ctx),
 		address:             address,
 		wsAddress:           wsAddress,
@@ -173,12 +174,13 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 		url:                 aURL,
 		wsURL:               wsURL,
 		customFingerprint:   customFingerprint,
+		insecureSkipVerify:  insecure,
 		subscribedAddresses: make(map[string]bool),
 		handshakeTimeout:    HandshakeTimeout,
 		dialer: &websocket.Dialer{
 			TLSClientConfig: &tls.Config{
 				RootCAs:            pool,
-				InsecureSkipVerify: false,
+				InsecureSkipVerify: insecure,
 				VerifyPeerCertificate: func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
 					return verifyPeer(rawCerts, verifiedChains, customFingerprint)
 				},
@@ -201,6 +203,13 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 				Concurrency:      4096,
 				DNSCacheDuration: time.Hour,
 			}).Dial,
+			TLSConfig: &tls.Config{
+				RootCAs:            pool,
+				InsecureSkipVerify: insecure,
+				VerifyPeerCertificate: func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
+					return verifyPeer(rawCerts, verifiedChains, customFingerprint)
+				},
+			},
 		},
 	}
 
