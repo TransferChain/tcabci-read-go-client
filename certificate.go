@@ -12,6 +12,10 @@ const (
 )
 
 func verifyPeer(rawCerts [][]byte, _ [][]*x509.Certificate, customFingerprint *string) error {
+	if customFingerprint != nil && *customFingerprint == "" {
+		return nil
+	}
+
 	var fingerprints []string
 	for i := 0; i < len(rawCerts); i++ {
 		ci, err := x509.ParseCertificate(rawCerts[i])
