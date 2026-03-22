@@ -12,17 +12,22 @@ import (
 
 type transport struct {
 	verbose           bool
+	insecure          bool
 	TLSClientConfig   *tls.Config
 	customFingerprint *string
+	certs             []tls.Certificate
 }
 
-func newTransport(pool *x509.CertPool, verbose bool, customFingerprint *string) (*transport, error) {
+func newTransport(pool *x509.CertPool, verbose bool, insecure bool, customFingerprint *string, certs []tls.Certificate) (*transport, error) {
 	return &transport{
 		verbose:           verbose,
+		insecure:          insecure,
 		customFingerprint: customFingerprint,
+		certs:             certs,
 		TLSClientConfig: &tls.Config{
-			RootCAs:            pool,
-			InsecureSkipVerify: false,
+			ClientCAs:          pool,
+			Certificates:       certs,
+			InsecureSkipVerify: insecure,
 			VerifyPeerCertificate: func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
 				return verifyPeer(rawCerts, verifiedChains, customFingerprint)
 			},

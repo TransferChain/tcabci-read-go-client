@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -97,6 +98,7 @@ type client struct {
 	chainName            string
 	chainVersion         string
 	customFingerprint    *string
+	cert                 io.Reader
 	insecureSkipVerify   bool
 	url                  *url.URL
 	wsURL                *url.URL
@@ -128,16 +130,16 @@ type sendMsg struct {
 }
 
 // NewClient make ws client
-func NewClient(address string, wsAddress string, chainName, chainVersion string, insecure bool, customFingerprint *string) (Client, error) {
-	return newClient(context.Background(), address, wsAddress, chainName, chainVersion, insecure, customFingerprint)
+func NewClient(address string, wsAddress string, chainName, chainVersion string, insecure bool, customFingerprint *string, cert io.Reader) (Client, error) {
+	return newClient(context.Background(), address, wsAddress, chainName, chainVersion, insecure, customFingerprint, cert)
 }
 
 // NewClientContext make ws client with context
-func NewClientContext(ctx context.Context, address string, wsAddress string, chainName, chainVersion string, insecure bool, customFingerprint *string) (Client, error) {
-	return newClient(ctx, address, wsAddress, chainName, chainVersion, insecure, customFingerprint)
+func NewClientContext(ctx context.Context, address string, wsAddress string, chainName, chainVersion string, insecure bool, customFingerprint *string, cert io.Reader) (Client, error) {
+	return newClient(ctx, address, wsAddress, chainName, chainVersion, insecure, customFingerprint, cert)
 }
 
-func newClient(ctx context.Context, address string, wsAddress string, chainName, chainVersion string, insecure bool, customFingerprint *string) (Client, error) {
+func newClient(ctx context.Context, address string, wsAddress string, chainName, chainVersion string, insecure bool, customFingerprint *string, cert io.Reader) (Client, error) {
 	aURL, err := url.Parse(address)
 	if err != nil {
 		return nil, err
@@ -156,12 +158,24 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 		return nil, errors.New("invalid websocket address")
 	}
 
+	maxIdleConnDuration, _ := time.ParseDuration("1h")
+
+	var certs []tls.Certificate
+	if cert != nil {
+		ir, err := io.ReadAll(cert)
+		if err != nil {
+			return nil, err
+		}
+
+		certs = append(certs, tls.Certificate{
+			Certificate: [][]byte{ir},
+		})
+	}
+
 	pool, err := x509.SystemCertPool()
 	if err != nil {
 		return nil, err
 	}
-
-	maxIdleConnDuration, _ := time.ParseDuration("1h")
 
 	c := &client{
 		ctx:                 ctx,
@@ -174,12 +188,14 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 		url:                 aURL,
 		wsURL:               wsURL,
 		customFingerprint:   customFingerprint,
+		cert:                cert,
 		insecureSkipVerify:  insecure,
 		subscribedAddresses: make(map[string]bool),
 		handshakeTimeout:    HandshakeTimeout,
 		dialer: &websocket.Dialer{
 			TLSClientConfig: &tls.Config{
-				RootCAs:            pool,
+				ClientCAs:          pool,
+				Certificates:       certs,
 				InsecureSkipVerify: insecure,
 				VerifyPeerCertificate: func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
 					return verifyPeer(rawCerts, verifiedChains, customFingerprint)
@@ -204,7 +220,7 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 				DNSCacheDuration: time.Hour,
 			}).Dial,
 			TLSConfig: &tls.Config{
-				RootCAs:            pool,
+				Certificates:       certs,
 				InsecureSkipVerify: insecure,
 				VerifyPeerCertificate: func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
 					return verifyPeer(rawCerts, verifiedChains, customFingerprint)
@@ -213,7 +229,7 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 		},
 	}
 
-	trn, err := newTransport(pool, false, customFingerprint)
+	trn, err := newTransport(nil, false, insecure, customFingerprint, certs)
 	if err != nil {
 		return nil, err
 	}
@@ -243,12 +259,24 @@ func (c *client) WithLogger(l Logger) Client {
 func (c *client) SetVerbose(v bool) (Client, error) {
 	c.verbose = v
 
+	var certs []tls.Certificate
+	if c.cert != nil {
+		ir, err := io.ReadAll(c.cert)
+		if err != nil {
+			return nil, err
+		}
+
+		certs = append(certs, tls.Certificate{
+			Certificate: [][]byte{ir},
+		})
+	}
+
 	pool, err := x509.SystemCertPool()
 	if err != nil {
 		return nil, err
 	}
 
-	trn, err := newTransport(pool, v, c.customFingerprint)
+	trn, err := newTransport(pool, v, c.insecureSkipVerify, c.customFingerprint, certs)
 	if err != nil {
 		return nil, err
 	}
