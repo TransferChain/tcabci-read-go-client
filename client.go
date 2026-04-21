@@ -34,6 +34,7 @@ import (
 
 	"github.com/fasthttp/websocket"
 	"github.com/valyala/fasthttp"
+	"github.com/valyala/fasthttp/fasthttpproxy"
 )
 
 // ErrNoConnected ...
@@ -64,6 +65,7 @@ const (
 
 // Client TCABCI Read Node Websocket Client
 type Client interface {
+	WithProxy(proxyURL *url.URL) Client
 	// SetLogger ..
 	// Deprecated: use WithLogger/1
 	SetLogger(l Logger) Client
@@ -242,6 +244,12 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 	c.wsHeaders.Set("User-Agent", fmt.Sprintf("tcabaci-read-go-client/%s (%s;%s)", c.version, runtime.GOOS, runtime.GOARCH))
 
 	return c, nil
+}
+
+func (c *client) WithProxy(proxyURL *url.URL) Client {
+	c.httpClient.Dial = fasthttpproxy.FasthttpHTTPDialerTimeout(proxyURL.String(), 0)
+	c.dialer.Proxy = http.ProxyURL(proxyURL)
+	return c
 }
 
 // SetLogger ..
