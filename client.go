@@ -74,6 +74,7 @@ type Client interface {
 	Start() error
 	Stop() error
 	SetListenCallback(func(transaction *Transaction))
+	WSQuery(typ string, data []byte) error
 	Subscribe(addresses []string, signedDatas map[string]string, txTypes ...Type) error
 	Unsubscribe() error
 	Write(b []byte) error
@@ -181,7 +182,7 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 
 	c := &client{
 		ctx:                 ctx,
-		version:             "1.6.16",
+		version:             "1.6.17",
 		lgr:                 NewLogger(ctx),
 		address:             address,
 		wsAddress:           wsAddress,
@@ -293,6 +294,16 @@ func (c *client) SetVerbose(v bool) (Client, error) {
 	return c, nil
 }
 
+func (c *client) AddHeader(key, value string) Client {
+	c.headers.Add(key, value)
+	return c
+}
+
+func (c *client) AddWSHeader(key, value string) Client {
+	c.wsHeaders.Add(key, value)
+	return c
+}
+
 // Start contexts and ws client and client retriever
 func (c *client) Start() error {
 	if c.getStarted() {
@@ -349,6 +360,30 @@ func (c *client) Write(b []byte) error {
 // transaction event
 func (c *client) SetListenCallback(fn func(transaction *Transaction)) {
 	c.listenCallback = fn
+}
+
+func (c *client) WSQuery(typ string, data []byte) error {
+	subscribeMessage := Message{
+		IsWeb: false,
+		Type:  MessageType(typ),
+		Data:  data,
+	}
+
+	b, err := json.Marshal(subscribeMessage)
+	if err != nil {
+		c.lgr.Error(err)
+		return err
+	}
+
+	go func() {
+		c.sendBuf <- sendMsg{
+			typ:        message,
+			messageTyp: websocket.TextMessage,
+			msg:        b,
+		}
+	}()
+
+	return nil
 }
 
 // Subscribe to given addresses
