@@ -85,7 +85,7 @@ type Client interface {
 	BroadcastSync(id string, version uint32, typ Type, data []byte, additionalData, cipherData *[]byte, senderAddress, recipientAddress string, sign []byte, fee uint64) (*BroadcastResponse, error)
 	BroadcastCommit(id string, version uint32, typ Type, data []byte, additionalData, cipherData *[]byte, senderAddress, recipientAddress string, sign []byte, fee uint64) (*BroadcastResponse, error)
 	FetchNS(identifier string) (*NS, error)
-	Query(method string, path string, data []byte) (*Response, error)
+	Query(method string, path string, data []byte, headers map[string][]string) (*Response, error)
 }
 
 type client struct {
@@ -658,7 +658,7 @@ func (c *client) BroadcastCommit(id string, version uint32, typ Type, data []byt
 	return resp, nil
 }
 
-func (c *client) Query(method string, path string, data []byte) (*Response, error) {
+func (c *client) Query(method string, path string, data []byte, headers map[string][]string) (*Response, error) {
 	if e, _, _ := InArray(method, []string{fasthttp.MethodGet, fasthttp.MethodPost}); !e {
 		return nil, errors.New("invalid method")
 	}
@@ -669,6 +669,11 @@ func (c *client) Query(method string, path string, data []byte) (*Response, erro
 
 	c.headers.CopyTo(&req.Header)
 	req.Header.Set("Content-Type", "application/json")
+	for k, v := range headers {
+		for _, vv := range v {
+			req.Header.Add(k, vv)
+		}
+	}
 
 	uri := fasthttp.AcquireURI()
 	defer fasthttp.ReleaseURI(uri)
