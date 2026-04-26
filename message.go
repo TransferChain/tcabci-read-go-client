@@ -33,4 +33,5 @@ type Message struct {
 	Addrs       []string          `json:"addrs"`
 	SignedAddrs map[string]string `json:"signed_addrs"`
 	TXTypes     []Type            `json:"tx_types"`
+	Data        []byte            `json:"data,omitempty"`
 }
