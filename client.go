@@ -71,6 +71,8 @@ type Client interface {
 	SetLogger(l Logger) Client
 	WithLogger(l Logger) Client
 	SetVerbose(verbose bool) (Client, error)
+	AddHeader(key, value string) Client
+	AddWSHeader(key, value string) Client
 	Start() error
 	Stop() error
 	SetListenCallback(func(block *Block, transaction *Transaction))
@@ -182,7 +184,7 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 
 	c := &client{
 		ctx:                 ctx,
-		version:             "1.6.18",
+		version:             "1.6.19",
 		lgr:                 NewLogger(ctx),
 		address:             address,
 		wsAddress:           wsAddress,
