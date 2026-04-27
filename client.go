@@ -73,7 +73,7 @@ type Client interface {
 	SetVerbose(verbose bool) (Client, error)
 	Start() error
 	Stop() error
-	SetListenCallback(func(transaction *Transaction))
+	SetListenCallback(func(block *Block, transaction *Transaction))
 	WSQuery(typ string, data []byte) error
 	Subscribe(addresses []string, signedDatas map[string]string, txTypes ...Type) error
 	Unsubscribe() error
@@ -112,7 +112,7 @@ type client struct {
 	connected            bool
 	started              bool
 	handshakeTimeout     time.Duration
-	listenCallback       func(transaction *Transaction)
+	listenCallback       func(block *Block, transaction *Transaction)
 	errorCount           int32
 	subscribedAddresses  map[string]bool
 	subscribedSignedData map[string]string
@@ -182,7 +182,7 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 
 	c := &client{
 		ctx:                 ctx,
-		version:             "1.6.17",
+		version:             "1.6.18",
 		lgr:                 NewLogger(ctx),
 		address:             address,
 		wsAddress:           wsAddress,
@@ -358,7 +358,7 @@ func (c *client) Write(b []byte) error {
 
 // SetListenCallback Callback that will be called when the WS client captures a
 // transaction event
-func (c *client) SetListenCallback(fn func(transaction *Transaction)) {
+func (c *client) SetListenCallback(fn func(block *Block, transaction *Transaction)) {
 	c.listenCallback = fn
 }
 
@@ -1119,11 +1119,7 @@ func (c *client) listen() {
 						continue
 					}
 
-					var transaction Transaction
-					if err := json.Unmarshal(received.ReadingMessage, &transaction); err == nil {
-						c.lgr.Error(err)
-						c.listenCallback(&transaction)
-					}
+					c.parseIncoming(received.ReadingMessage)
 				}
 			}
 		}
@@ -1303,4 +1299,29 @@ func (c *client) unsubscribe(_ bool) error {
 	c.setSubscribed(false)
 
 	return nil
+}
+
+func (c *client) parseIncoming(msg []byte) {
+	var incomingMsg IncomingMessage
+	if err := json.Unmarshal(msg, &incomingMsg); err == nil {
+		c.lgr.Error(err)
+		return
+	}
+
+	if incomingMsg.Type == 0 {
+		var block Block
+		bb, _ := json.Marshal(incomingMsg.Data)
+		if err := json.Unmarshal(bb, &block); err == nil {
+			c.lgr.Error(err)
+			c.listenCallback(&block, nil)
+		}
+	} else if incomingMsg.Type == 1 {
+		var transaction Transaction
+		bb, _ := json.Marshal(incomingMsg.Data)
+		if err := json.Unmarshal(bb, &transaction); err == nil {
+			c.lgr.Error(err)
+			c.listenCallback(nil, &transaction)
+		}
+	}
+
 }
