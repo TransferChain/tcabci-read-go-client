@@ -411,7 +411,9 @@ func (c *client) LastBlock(chainName, chainVersion *string) (*LastBlock, error) 
 
 	req := fasthttp.AcquireRequest()
 	defer fasthttp.ReleaseRequest(req)
-	c.headers.CopyTo(&req.Header)
+	for k, v := range c.headers.All() {
+		req.Header.SetBytesKV(k, v)
+	}
 	req.Header.Set("Content-Type", "application/json")
 
 	uri := fasthttp.AcquireURI()
@@ -484,7 +486,9 @@ func (c *client) Tx(id string, signature string, chainName, chainVersion *string
 
 	req.SetURI(uri)
 
-	c.headers.CopyTo(&req.Header)
+	for k, v := range c.headers.All() {
+		req.Header.SetBytesKV(k, v)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Signature", signature)
 
@@ -552,7 +556,9 @@ func (c *client) TxSummary(summary *Summary) (lastBlockHeight uint64, lastTransa
 
 	req.SetURI(uri)
 
-	c.headers.CopyTo(&req.Header)
+	for k, v := range c.headers.All() {
+		req.Header.SetBytesKV(k, v)
+	}
 	req.Header.Set("Content-Type", "application/json")
 
 	var summaryResponse SummaryResponse
@@ -616,7 +622,9 @@ func (c *client) TxSearch(search *Search) (txs []*Transaction, totalCount uint64
 	}
 	defer fasthttp.ReleaseRequest(req)
 
-	c.headers.CopyTo(&req.Header)
+	for k, v := range c.headers.All() {
+		req.Header.SetBytesKV(k, v)
+	}
 	req.Header.Set("Content-Type", "application/json")
 
 	uri := fasthttp.AcquireURI()
@@ -704,7 +712,9 @@ func (c *client) Query(method string, path string, data []byte, headers map[stri
 	req := fasthttp.AcquireRequest()
 	defer fasthttp.ReleaseRequest(req)
 
-	c.headers.CopyTo(&req.Header)
+	for k, v := range c.headers.All() {
+		req.Header.SetBytesKV(k, v)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	for k, v := range headers {
 		for _, vv := range v {
@@ -766,7 +776,9 @@ func (c *client) FetchNS(identifier string) (*NS, error) {
 	req := fasthttp.AcquireRequest()
 	defer fasthttp.ReleaseRequest(req)
 
-	c.headers.CopyTo(&req.Header)
+	for k, v := range c.headers.All() {
+		req.Header.SetBytesKV(k, v)
+	}
 	req.Header.Set("Content-Type", "application/json")
 
 	uri := fasthttp.AcquireURI()
@@ -841,7 +853,9 @@ func (c *client) broadcast(id string, version uint32, typ Type, data []byte, add
 	}
 	defer fasthttp.ReleaseRequest(req)
 
-	c.headers.CopyTo(&req.Header)
+	for k, v := range c.headers.All() {
+		req.Header.SetBytesKV(k, v)
+	}
 	req.Header.Set("Content-Type", "application/json")
 
 	uri := fasthttp.AcquireURI()
@@ -968,9 +982,7 @@ func (c *client) connect(reconnect bool) (*websocket.Conn, error) {
 			currentState := c.isConnected()
 			headers := http.Header{}
 			for kk, vv := range c.wsHeaders.All() {
-				for _, v := range vv {
-					headers.Add(string(kk), strconv.Itoa(int(v)))
-				}
+				headers.Add(string(kk), string(vv))
 			}
 			conn, response, err := c.dialer.DialContext(c.ctx, c.wsURL.String(), headers)
 			c.mut.Lock()
