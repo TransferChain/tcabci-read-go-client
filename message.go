@@ -35,3 +35,8 @@ type Message struct {
 	TXTypes     []Type            `json:"tx_types"`
 	Data        []byte            `json:"data,omitempty"`
 }
+
+type IncomingMessage struct {
+	Type int         `json:"type"`
+	Data interface{} `json:"data"`
+}
