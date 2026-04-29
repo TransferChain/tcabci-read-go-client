@@ -1317,29 +1317,32 @@ func (c *client) unsubscribe(_ bool) error {
 
 func (c *client) parseIncoming(msg []byte) {
 	var incomingMsg IncomingMessage
-	if err := json.Unmarshal(msg, &incomingMsg); err == nil {
+	if err := json.Unmarshal(msg, &incomingMsg); err != nil {
 		// deprecated
 		var transaction Transaction
-		if err := json.Unmarshal(msg, &transaction); err == nil {
+		if err := json.Unmarshal(msg, &transaction); err != nil {
 			c.lgr.Error(err)
-			c.listenCallback(nil, &transaction)
+			return
 		}
+		c.listenCallback(nil, &transaction)
 		return
 	}
 
 	if incomingMsg.Type == 0 {
 		var block Block
 		bb, _ := json.Marshal(incomingMsg.Data)
-		if err := json.Unmarshal(bb, &block); err == nil {
+		if err := json.Unmarshal(bb, &block); err != nil {
 			c.lgr.Error(err)
-			c.listenCallback(&block, nil)
+			return
 		}
+		c.listenCallback(&block, nil)
 	} else if incomingMsg.Type == 1 {
 		var transaction Transaction
 		bb, _ := json.Marshal(incomingMsg.Data)
-		if err := json.Unmarshal(bb, &transaction); err == nil {
+		if err := json.Unmarshal(bb, &transaction); err != nil {
 			c.lgr.Error(err)
-			c.listenCallback(nil, &transaction)
+			return
 		}
+		c.listenCallback(nil, &transaction)
 	}
 }
