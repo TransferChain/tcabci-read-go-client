@@ -29,6 +29,7 @@ import (
 	"net/url"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -177,14 +178,26 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 		})
 	}
 
-	pool, err := x509.SystemCertPool()
-	if err != nil {
-		return nil, err
+	var tlsConfig *tls.Config
+	if strings.HasPrefix(address, "https://") || strings.HasPrefix(wsAddress, "wss://") || cert != nil {
+		pool, err := x509.SystemCertPool()
+		if err != nil {
+			return nil, err
+		}
+
+		tlsConfig = &tls.Config{
+			ClientCAs:          pool,
+			Certificates:       certs,
+			InsecureSkipVerify: insecure,
+			VerifyPeerCertificate: func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
+				return verifyPeer(rawCerts, verifiedChains, customFingerprint)
+			},
+		}
 	}
 
 	c := &client{
 		ctx:                 ctx,
-		version:             "1.6.23",
+		version:             "1.6.24",
 		lgr:                 NewLogger(ctx),
 		address:             address,
 		wsAddress:           wsAddress,
@@ -198,14 +211,7 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 		subscribedAddresses: make(map[string]bool),
 		handshakeTimeout:    HandshakeTimeout,
 		dialer: &websocket.Dialer{
-			TLSClientConfig: &tls.Config{
-				ClientCAs:          pool,
-				Certificates:       certs,
-				InsecureSkipVerify: insecure,
-				VerifyPeerCertificate: func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
-					return verifyPeer(rawCerts, verifiedChains, customFingerprint)
-				},
-			},
+			TLSClientConfig:   tlsConfig,
 			HandshakeTimeout:  HandshakeTimeout,
 			ReadBufferSize:    5 * 1024 * 1024,
 			WriteBufferSize:   5 * 1024 * 1024,
@@ -224,13 +230,7 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 				Concurrency:      4096,
 				DNSCacheDuration: time.Hour,
 			}).Dial,
-			TLSConfig: &tls.Config{
-				Certificates:       certs,
-				InsecureSkipVerify: insecure,
-				VerifyPeerCertificate: func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
-					return verifyPeer(rawCerts, verifiedChains, customFingerprint)
-				},
-			},
+			TLSConfig: tlsConfig,
 		},
 	}
 
