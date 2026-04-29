@@ -988,7 +988,7 @@ func (c *client) connect(reconnect bool) (*websocket.Conn, error) {
 			c.mut.Lock()
 			c.conn = conn
 			c.connected = err == nil
-			if response.StatusCode >= 400 {
+			if response != nil && response.StatusCode >= 400 {
 				c.connected = false
 				err = errors.New(response.Status)
 			}
