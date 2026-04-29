@@ -1318,7 +1318,12 @@ func (c *client) unsubscribe(_ bool) error {
 func (c *client) parseIncoming(msg []byte) {
 	var incomingMsg IncomingMessage
 	if err := json.Unmarshal(msg, &incomingMsg); err == nil {
-		c.lgr.Error(err)
+		// deprecated
+		var transaction Transaction
+		if err := json.Unmarshal(msg, &transaction); err == nil {
+			c.lgr.Error(err)
+			c.listenCallback(nil, &transaction)
+		}
 		return
 	}
 
@@ -1337,5 +1342,4 @@ func (c *client) parseIncoming(msg []byte) {
 			c.listenCallback(nil, &transaction)
 		}
 	}
-
 }
