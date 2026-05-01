@@ -26,6 +26,13 @@ const (
 	Unsubscribe MessageType = "unsubscribe"
 )
 
+type State int
+
+const (
+	OK State = iota + 1
+	Fail
+)
+
 // Message ..
 type Message struct {
 	IsWeb       bool              `json:"is_web"`
@@ -37,6 +44,7 @@ type Message struct {
 }
 
 type IncomingMessage struct {
-	Type int         `json:"type"`
-	Data interface{} `json:"data"`
+	Type  int         `json:"type"`
+	Data  interface{} `json:"data"`
+	State *State      `json:"state,omitempty"`
 }

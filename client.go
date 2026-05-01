@@ -119,6 +119,7 @@ type client struct {
 	errorCount           int32
 	subscribedAddresses  map[string]bool
 	subscribedSignedData map[string]string
+	subscribedTypes      []Type
 	listenCtx            context.Context
 	listenCtxCancel      context.CancelFunc
 	mut                  sync.RWMutex
@@ -196,20 +197,22 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 	}
 
 	c := &client{
-		ctx:                 ctx,
-		version:             "1.6.24",
-		lgr:                 NewLogger(ctx),
-		address:             address,
-		wsAddress:           wsAddress,
-		chainName:           chainName,
-		chainVersion:        chainVersion,
-		url:                 aURL,
-		wsURL:               wsURL,
-		customFingerprint:   customFingerprint,
-		cert:                cert,
-		insecureSkipVerify:  insecure,
-		subscribedAddresses: make(map[string]bool),
-		handshakeTimeout:    HandshakeTimeout,
+		ctx:                  ctx,
+		version:              "1.6.24",
+		lgr:                  NewLogger(ctx),
+		address:              address,
+		wsAddress:            wsAddress,
+		chainName:            chainName,
+		chainVersion:         chainVersion,
+		url:                  aURL,
+		wsURL:                wsURL,
+		customFingerprint:    customFingerprint,
+		cert:                 cert,
+		insecureSkipVerify:   insecure,
+		subscribedAddresses:  make(map[string]bool),
+		subscribedSignedData: make(map[string]string),
+		subscribedTypes:      make([]Type, 0),
+		handshakeTimeout:     HandshakeTimeout,
 		dialer: &websocket.Dialer{
 			TLSClientConfig:   tlsConfig,
 			HandshakeTimeout:  HandshakeTimeout,
@@ -952,6 +955,16 @@ func (c *client) setSubscribedAddress(v map[string]bool) {
 	c.mut.Unlock()
 }
 
+func (c *client) setSubscribedTypes(types ...Type) {
+	if len(types) == 0 {
+		return
+	}
+
+	c.mut.Lock()
+	c.subscribedTypes = types
+	c.mut.Unlock()
+}
+
 func (c *client) getSubscribedSignedDatas() map[string]string {
 	return c.subscribedSignedData
 }
@@ -1062,10 +1075,12 @@ func (c *client) write(sm sendMsg) (err error) {
 func (c *client) listenWrite() {
 	for buf := range c.sendBuf {
 		if !c.isConnected() {
+			c.sendBuf <- buf
 			continue
 		}
 		conn := c.getConn()
 		if conn == nil {
+			c.sendBuf <- buf
 			continue
 		}
 		var err error
@@ -1146,10 +1161,23 @@ func (c *client) ping() {
 		select {
 		case <-c.pingTicker.C:
 			if !c.isConnected() {
+				ls := c.subscribed
 				_, err := c.connect(false)
 				if err != nil {
 					c.lgr.Error(err)
 					continue
+				}
+
+				if ls {
+					addrs := make([]string, len(c.subscribedAddresses))
+					i := 0
+					for k, _ := range c.subscribedAddresses {
+						addrs[i] = k
+						i++
+					}
+					if err = c.Subscribe(addrs, c.subscribedSignedData, c.subscribedTypes...); err != nil {
+						c.lgr.Error(err)
+					}
 				}
 			} else {
 				if err := c.write(sendMsg{
@@ -1273,7 +1301,7 @@ func (c *client) subscribe(already bool, addresses []string, signedDatas map[str
 	}
 	c.setSubscribedAddress(tmp)
 	c.setSubscribedSignedDatas(tSignedData)
-	c.setSubscribed(true)
+	c.setSubscribedTypes(txTypes...)
 
 	return nil
 }
@@ -1316,33 +1344,44 @@ func (c *client) unsubscribe(_ bool) error {
 }
 
 func (c *client) parseIncoming(msg []byte) {
-	var incomingMsg IncomingMessage
-	if err := json.Unmarshal(msg, &incomingMsg); err != nil {
-		// deprecated
-		var transaction Transaction
-		if err := json.Unmarshal(msg, &transaction); err != nil {
+	var transaction Transaction
+	if err := json.Unmarshal(msg, &transaction); err != nil || (transaction.ID == nil || (transaction.ID != nil && transaction.ID.(string) == "")) {
+		c.lgr.Error(err)
+
+		var incomingMsg IncomingMessage
+		if err := json.Unmarshal(msg, &incomingMsg); err != nil {
 			c.lgr.Error(err)
 			return
 		}
-		c.listenCallback(nil, &transaction)
+
+		switch incomingMsg.Type {
+		case 0:
+			var block Block
+			bb, _ := json.Marshal(incomingMsg.Data)
+			if err := json.Unmarshal(bb, &block); err != nil {
+				c.lgr.Error(err)
+				return
+			}
+			c.listenCallback(&block, nil)
+			break
+		case 1:
+			var transaction Transaction
+			bb, _ := json.Marshal(incomingMsg.Data)
+			if err := json.Unmarshal(bb, &transaction); err != nil {
+				c.lgr.Error(err)
+				return
+			}
+			c.listenCallback(nil, &transaction)
+			break
+		case 2:
+			if incomingMsg.State != nil && *incomingMsg.State == OK {
+				c.setSubscribed(true)
+			}
+			break
+		}
+
 		return
 	}
 
-	if incomingMsg.Type == 0 {
-		var block Block
-		bb, _ := json.Marshal(incomingMsg.Data)
-		if err := json.Unmarshal(bb, &block); err != nil {
-			c.lgr.Error(err)
-			return
-		}
-		c.listenCallback(&block, nil)
-	} else if incomingMsg.Type == 1 {
-		var transaction Transaction
-		bb, _ := json.Marshal(incomingMsg.Data)
-		if err := json.Unmarshal(bb, &transaction); err != nil {
-			c.lgr.Error(err)
-			return
-		}
-		c.listenCallback(nil, &transaction)
-	}
+	c.listenCallback(nil, &transaction)
 }
