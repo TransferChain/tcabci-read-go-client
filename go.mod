@@ -5,7 +5,7 @@ go 1.25.0
 require (
 	github.com/fasthttp/websocket v1.5.12
 	github.com/sirupsen/logrus v1.9.4
-	github.com/valyala/fasthttp v1.70.0
+	github.com/valyala/fasthttp v1.71.0
 )
 
 require (

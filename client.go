@@ -72,6 +72,7 @@ type Client interface {
 	SetLogger(l Logger) Client
 	WithLogger(l Logger) Client
 	SetVerbose(verbose bool) (Client, error)
+	AddRetrieveCallback(fn func()) Client
 	AddHeader(key, value string) Client
 	AddWSHeader(key, value string) Client
 	Start() error
@@ -108,6 +109,7 @@ type client struct {
 	insecureSkipVerify   bool
 	url                  *url.URL
 	wsURL                *url.URL
+	retrieveCallbacks    []func()
 	headers              fasthttp.RequestHeader
 	wsHeaders            fasthttp.RequestHeader
 	version              string
@@ -198,7 +200,7 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 
 	c := &client{
 		ctx:                  ctx,
-		version:              "1.6.25",
+		version:              "1.6.26",
 		lgr:                  NewLogger(ctx),
 		address:              address,
 		wsAddress:            wsAddress,
@@ -206,6 +208,7 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 		chainVersion:         chainVersion,
 		url:                  aURL,
 		wsURL:                wsURL,
+		retrieveCallbacks:    make([]func(), 0),
 		customFingerprint:    customFingerprint,
 		cert:                 cert,
 		insecureSkipVerify:   insecure,
@@ -297,6 +300,11 @@ func (c *client) SetVerbose(v bool) (Client, error) {
 	c.httpClient.Transport = trn
 
 	return c, nil
+}
+
+func (c *client) AddRetrieveCallback(fn func()) Client {
+	c.retrieveCallbacks = append(c.retrieveCallbacks, fn)
+	return c
 }
 
 func (c *client) AddHeader(key, value string) Client {
@@ -993,6 +1001,7 @@ func (c *client) connect(reconnect bool) (*websocket.Conn, error) {
 			return nil, errors.New("main context canceled")
 		default:
 			currentState := c.isConnected()
+			c.callRetrievers()
 			headers := http.Header{}
 			for kk, vv := range c.wsHeaders.All() {
 				headers.Add(string(kk), string(vv))
@@ -1384,4 +1393,12 @@ func (c *client) parseIncoming(msg []byte) {
 	}
 
 	c.listenCallback(nil, &transaction)
+}
+
+func (c *client) callRetrievers() {
+	for i := 0; i < len(c.retrieveCallbacks); i++ {
+		go c.retrieveCallbacks[i]()
+	}
+
+	time.Sleep(100 * time.Millisecond)
 }
