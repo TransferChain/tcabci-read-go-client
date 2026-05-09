@@ -1030,7 +1030,7 @@ func (c *client) connect(reconnect bool) (*websocket.Conn, error) {
 				headers.Add(string(kk), string(vv))
 			}
 			conn, response, err := c.dialer.DialContext(c.ctx, c.wsURL.String(), headers)
-			if err != nil {
+			if err != nil && response != nil {
 				_ = response.Body.Close()
 			}
 			c.mut.Lock()
