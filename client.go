@@ -167,7 +167,7 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 		return nil, errors.New("invalid websocket address")
 	}
 
-	maxIdleConnDuration, _ := time.ParseDuration("1h")
+	maxIdleConnDuration, _ := time.ParseDuration("3s")
 
 	var certs []tls.Certificate
 	if cert != nil {
@@ -200,7 +200,7 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 
 	c := &client{
 		ctx:                  ctx,
-		version:              "1.6.26",
+		version:              "1.6.27",
 		lgr:                  NewLogger(ctx),
 		address:              address,
 		wsAddress:            wsAddress,
@@ -353,6 +353,9 @@ func (c *client) Stop() error {
 		c.pingTicker.Stop()
 	}
 	c.closeWS()
+	c.httpClient.CloseIdleConnections()
+	c.httpClient.ConnPoolStrategy = fasthttp.FIFO
+
 	//
 	c.setSubscribed(false)
 	c.setStarted(false)
@@ -1355,8 +1358,6 @@ func (c *client) unsubscribe(_ bool) error {
 func (c *client) parseIncoming(msg []byte) {
 	var transaction Transaction
 	if err := json.Unmarshal(msg, &transaction); err != nil || (transaction.ID == nil || (transaction.ID != nil && transaction.ID.(string) == "")) {
-		c.lgr.Error(err)
-
 		var incomingMsg IncomingMessage
 		if err := json.Unmarshal(msg, &incomingMsg); err != nil {
 			c.lgr.Error(err)
@@ -1364,7 +1365,7 @@ func (c *client) parseIncoming(msg []byte) {
 		}
 
 		switch incomingMsg.Type {
-		case 0:
+		case float64(0):
 			var block Block
 			bb, _ := json.Marshal(incomingMsg.Data)
 			if err := json.Unmarshal(bb, &block); err != nil {
@@ -1373,8 +1374,7 @@ func (c *client) parseIncoming(msg []byte) {
 			}
 			c.listenCallback(&block, nil)
 			break
-		case 1:
-			var transaction Transaction
+		case float64(1):
 			bb, _ := json.Marshal(incomingMsg.Data)
 			if err := json.Unmarshal(bb, &transaction); err != nil {
 				c.lgr.Error(err)
@@ -1382,11 +1382,13 @@ func (c *client) parseIncoming(msg []byte) {
 			}
 			c.listenCallback(nil, &transaction)
 			break
-		case 2:
+		case float64(2):
 			if incomingMsg.State != nil && *incomingMsg.State == OK {
 				c.setSubscribed(true)
 			}
 			break
+		default:
+			//
 		}
 
 		return
