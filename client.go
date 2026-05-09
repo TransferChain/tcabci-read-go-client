@@ -1015,6 +1015,8 @@ func (c *client) connect(reconnect bool) (*websocket.Conn, error) {
 			c.connected = err == nil
 			if response != nil && response.StatusCode >= 400 {
 				c.connected = false
+				ir, _ := io.ReadAll(response.Body)
+				fmt.Println(string(ir))
 				err = errors.New(response.Status)
 			}
 			c.mut.Unlock()
