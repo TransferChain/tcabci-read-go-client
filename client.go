@@ -204,7 +204,7 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 
 	c := &client{
 		ctx:                  ctx,
-		version:              "1.6.29",
+		version:              "1.6.30",
 		lgr:                  NewLogger(ctx),
 		mode:                 Subscription,
 		address:              address,
@@ -1030,13 +1030,14 @@ func (c *client) connect(reconnect bool) (*websocket.Conn, error) {
 				headers.Add(string(kk), string(vv))
 			}
 			conn, response, err := c.dialer.DialContext(c.ctx, c.wsURL.String(), headers)
+			if err != nil {
+				_ = response.Body.Close()
+			}
 			c.mut.Lock()
 			c.conn = conn
 			c.connected = err == nil
 			if response != nil && response.StatusCode >= 400 {
 				c.connected = false
-				ir, _ := io.ReadAll(response.Body)
-				fmt.Println(string(ir))
 				err = errors.New(response.Status)
 			}
 			c.mut.Unlock()
