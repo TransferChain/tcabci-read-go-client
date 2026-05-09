@@ -75,7 +75,9 @@ type Client interface {
 	SetVerbose(verbose bool) (Client, error)
 	AddRetrieveCallback(fn func()) Client
 	AddHeader(key, value string) Client
+	RemoveHeader(key string) Client
 	AddWSHeader(key, value string) Client
+	RemoveWSHeader(key string) Client
 	Start() error
 	Stop() error
 	SetListenCallback(func(block *Block, transaction *Transaction))
@@ -320,8 +322,18 @@ func (c *client) AddHeader(key, value string) Client {
 	return c
 }
 
+func (c *client) RemoveHeader(key string) Client {
+	c.headers.Del(key)
+	return c
+}
+
 func (c *client) AddWSHeader(key, value string) Client {
 	c.wsHeaders.Add(key, value)
+	return c
+}
+
+func (c *client) RemoveWSHeader(key string) Client {
+	c.wsHeaders.Del(key)
 	return c
 }
 
