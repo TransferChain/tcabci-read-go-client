@@ -202,7 +202,7 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 
 	c := &client{
 		ctx:                  ctx,
-		version:              "1.6.27",
+		version:              "1.6.28",
 		lgr:                  NewLogger(ctx),
 		mode:                 Subscription,
 		address:              address,
