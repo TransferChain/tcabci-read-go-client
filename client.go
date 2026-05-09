@@ -66,6 +66,7 @@ const (
 
 // Client TCABCI Read Node Websocket Client
 type Client interface {
+	WithMode(mode Mode) Client
 	WithProxy(proxyURL *url.URL) Client
 	// SetLogger ..
 	// Deprecated: use WithLogger/1
@@ -99,6 +100,7 @@ type client struct {
 	mainCtxCancel        context.CancelFunc
 	conn                 *websocket.Conn
 	lgr                  Logger
+	mode                 Mode
 	verbose              bool
 	address              string
 	wsAddress            string
@@ -200,8 +202,9 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 
 	c := &client{
 		ctx:                  ctx,
-		version:              "1.6.27",
+		version:              "1.6.28",
 		lgr:                  NewLogger(ctx),
+		mode:                 Subscription,
 		address:              address,
 		wsAddress:            wsAddress,
 		chainName:            chainName,
@@ -253,6 +256,11 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 	c.wsHeaders.Set("User-Agent", fmt.Sprintf("tcabaci-read-go-client/%s (%s;%s)", c.version, runtime.GOOS, runtime.GOARCH))
 
 	return c, nil
+}
+
+func (c *client) WithMode(mode Mode) Client {
+	c.mode = mode
+	return c
 }
 
 func (c *client) WithProxy(proxyURL *url.URL) Client {
@@ -1015,12 +1023,14 @@ func (c *client) connect(reconnect bool) (*websocket.Conn, error) {
 			c.connected = err == nil
 			if response != nil && response.StatusCode >= 400 {
 				c.connected = false
+				ir, _ := io.ReadAll(response.Body)
+				fmt.Println(string(ir))
 				err = errors.New(response.Status)
 			}
 			c.mut.Unlock()
 
 			if err == nil {
-				if reconnect || (!currentState && c.getSubscribed()) {
+				if c.mode == Subscription && (reconnect || (!currentState && c.getSubscribed())) {
 					_ = c.unsubscribe(false)
 					_ = c.subscribe(true, nil, nil)
 				}
@@ -1173,7 +1183,7 @@ func (c *client) ping() {
 		select {
 		case <-c.pingTicker.C:
 			if !c.isConnected() {
-				ls := c.subscribed
+				ls := c.subscribed && c.mode == Subscription
 				_, err := c.connect(false)
 				if err != nil {
 					c.lgr.Error(err)

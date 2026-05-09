@@ -24,7 +24,7 @@ import (
 )
 
 func main() {
-	readNodeClient, _ := tcabcireadgoclient.NewClient("https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws", "medusa", "v2", false, nil)
+	readNodeClient, _ := tcabcireadgoclient.NewClient("https://read-node-01.transferchain.io", "wss://read-node-01.transferchain.io/ws", "medusa", "v2", false, nil, nil)
 
 	if err := readNodeClient.Start(); err != nil {
 		log.Fatal(err)
@@ -45,7 +45,7 @@ func main() {
 
 	done := make(chan struct{})
 	// If a transaction has been sent to your addresses, the callback you set here will be called.
-	readNodeClient.SetListenCallback(func(transaction *tcabcireadgoclient.Transaction) {
+	readNodeClient.SetListenCallback(func(block *tcabcireadgoclient.Block, transaction *tcabcireadgoclient.Transaction) {
 		// 
 		done <- struct{}{}
 	})
@@ -54,7 +54,7 @@ func main() {
 	close(done)
 
 	_ = readNodeClient.Unsubscribe()
-	readNodeClient.Stop()
+	_ = readNodeClient.Stop()
 }
 ```
 
