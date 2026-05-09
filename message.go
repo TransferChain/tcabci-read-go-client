@@ -44,7 +44,7 @@ type Message struct {
 }
 
 type IncomingMessage struct {
-	Type  int         `json:"type"`
+	Type  interface{} `json:"type"`
 	Data  interface{} `json:"data"`
 	State *State      `json:"state,omitempty"`
 }
