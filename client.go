@@ -68,9 +68,6 @@ const (
 type Client interface {
 	WithMode(mode Mode) Client
 	WithProxy(proxyURL *url.URL) Client
-	// SetLogger ..
-	// Deprecated: use WithLogger/1
-	SetLogger(l Logger) Client
 	WithLogger(l Logger) Client
 	SetVerbose(verbose bool) (Client, error)
 	AddRetrieveCallback(fn func()) Client
@@ -268,13 +265,6 @@ func (c *client) WithMode(mode Mode) Client {
 func (c *client) WithProxy(proxyURL *url.URL) Client {
 	c.httpClient.Dial = fasthttpproxy.FasthttpHTTPDialerTimeout(proxyURL.String(), 0)
 	c.dialer.Proxy = http.ProxyURL(proxyURL)
-	return c
-}
-
-// SetLogger ..
-// Deprecated: use WithLogger/1
-func (c *client) SetLogger(l Logger) Client {
-	c.lgr = l
 	return c
 }
 
