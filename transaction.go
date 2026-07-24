@@ -70,8 +70,9 @@ const (
 	TypePasswdRoomData        Type = "passwd_room_data"
 	TypePasswdRoomDataDelete  Type = "passwd_room_data_delete"
 	TypePasswdRoomDataPolicy  Type = "passwd_room_data_policy"
-	TypePasswdDataV2          Type = "pwdd"
-	TypePasswdDataV2Policy    Type = "pwdd_policy"
+	TypeDataV2                Type = "datav2"
+	TypeDataV2Policy          Type = "datav2_policy"
+	TypeDataV2Collection      Type = "datav2_collection"
 )
 
 func (t Type) IsValid() bool {
@@ -137,8 +138,9 @@ var TypesSlice = []Type{
 	TypePasswdRoomData,
 	TypePasswdRoomDataDelete,
 	TypePasswdRoomDataPolicy,
-	TypePasswdDataV2,
-	TypePasswdDataV2Policy,
+	TypeDataV2,
+	TypeDataV2Policy,
+	TypeDataV2Collection,
 }
 
 // Transaction read node transaction model
