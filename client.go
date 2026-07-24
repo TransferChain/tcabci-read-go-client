@@ -68,11 +68,13 @@ const (
 type Client interface {
 	WithMode(mode Mode) Client
 	WithProxy(proxyURL *url.URL) Client
-	// SetLogger ..
-	// Deprecated: use WithLogger/1
-	SetLogger(l Logger) Client
 	WithLogger(l Logger) Client
 	SetVerbose(verbose bool) (Client, error)
+	// SetListenCallback ...
+	// Deprecated
+	SetListenCallback(func(block *Block, transaction *Transaction)) Client
+	AddListenCallback(func(block *Block, transaction *Transaction)) Client
+	AddErrorCallback(func(err error)) Client
 	AddRetrieveCallback(fn func()) Client
 	AddHeader(key, value string) Client
 	RemoveHeader(key string) Client
@@ -80,7 +82,6 @@ type Client interface {
 	RemoveWSHeader(key string) Client
 	Start() error
 	Stop() error
-	SetListenCallback(func(block *Block, transaction *Transaction))
 	WSQuery(typ string, data []byte) error
 	Subscribe(addresses []string, signedDatas map[string]string, txTypes ...Type) error
 	Unsubscribe() error
@@ -121,7 +122,8 @@ type client struct {
 	connected            bool
 	started              bool
 	handshakeTimeout     time.Duration
-	listenCallback       func(block *Block, transaction *Transaction)
+	listenCallbacks      []func(block *Block, transaction *Transaction)
+	errorCallbacks       []func(err error)
 	errorCount           int32
 	subscribedAddresses  map[string]bool
 	subscribedSignedData map[string]string
@@ -204,7 +206,7 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 
 	c := &client{
 		ctx:                  ctx,
-		version:              "1.6.31",
+		version:              "1.6.32",
 		lgr:                  NewLogger(ctx),
 		mode:                 Subscription,
 		address:              address,
@@ -221,6 +223,8 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 		subscribedSignedData: make(map[string]string),
 		subscribedTypes:      make([]Type, 0),
 		handshakeTimeout:     HandshakeTimeout,
+		listenCallbacks:      make([]func(block *Block, transaction *Transaction), 0),
+		errorCallbacks:       make([]func(err error), 0),
 		dialer: &websocket.Dialer{
 			TLSClientConfig:   tlsConfig,
 			HandshakeTimeout:  HandshakeTimeout,
@@ -245,12 +249,7 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 		},
 	}
 
-	trn, err := newTransport(nil, false, insecure, customFingerprint, certs)
-	if err != nil {
-		return nil, err
-	}
-
-	c.httpClient.Transport = trn
+	c.httpClient.Transport = newTransport(nil, false, insecure, customFingerprint, certs)
 
 	c.headers.Set("Client", fmt.Sprintf("tcabaci-read-go-client/%s (%s;%s)", c.version, runtime.GOOS, runtime.GOARCH))
 	c.headers.Set("User-Agent", fmt.Sprintf("tcabaci-read-go-client/%s (%s;%s)", c.version, runtime.GOOS, runtime.GOARCH))
@@ -271,13 +270,6 @@ func (c *client) WithProxy(proxyURL *url.URL) Client {
 	return c
 }
 
-// SetLogger ..
-// Deprecated: use WithLogger/1
-func (c *client) SetLogger(l Logger) Client {
-	c.lgr = l
-	return c
-}
-
 func (c *client) WithLogger(l Logger) Client {
 	c.lgr = l
 	return c
@@ -290,7 +282,7 @@ func (c *client) SetVerbose(v bool) (Client, error) {
 	if c.cert != nil {
 		ir, err := io.ReadAll(c.cert)
 		if err != nil {
-			return nil, err
+			return nil, &Error{origin: err, message: err.Error(), typ: PARAMETERErr, code: 1}
 		}
 
 		certs = append(certs, tls.Certificate{
@@ -300,20 +292,35 @@ func (c *client) SetVerbose(v bool) (Client, error) {
 
 	pool, err := x509.SystemCertPool()
 	if err != nil {
-		return nil, err
+		return nil, &Error{origin: err, message: err.Error(), typ: SYSErr, code: 2}
 	}
 
-	trn, err := newTransport(pool, v, c.insecureSkipVerify, c.customFingerprint, certs)
-	if err != nil {
-		return nil, err
-	}
-	c.httpClient.Transport = trn
+	c.httpClient.Transport = newTransport(pool, v, c.insecureSkipVerify, c.customFingerprint, certs)
 
 	return c, nil
 }
 
+// SetListenCallback ...
+// Deprecated: use AddListenCallback/1
+func (c *client) SetListenCallback(fn func(block *Block, transaction *Transaction)) Client {
+	c.listenCallbacks = []func(block *Block, transaction *Transaction){fn}
+	return c
+}
+
+// AddListenCallback callback that will be called when the WS client captures a
+// transaction event
+func (c *client) AddListenCallback(fn func(block *Block, transaction *Transaction)) Client {
+	c.listenCallbacks = append(c.listenCallbacks, fn)
+	return c
+}
+
 func (c *client) AddRetrieveCallback(fn func()) Client {
 	c.retrieveCallbacks = append(c.retrieveCallbacks, fn)
+	return c
+}
+
+func (c *client) AddErrorCallback(fn func(err error)) Client {
+	c.errorCallbacks = append(c.errorCallbacks, fn)
 	return c
 }
 
@@ -365,7 +372,7 @@ func (c *client) Start() error {
 // Stop ws client and ws contexts
 func (c *client) Stop() error {
 	if !c.getStarted() {
-		return ErrNotStarted
+		return &Error{origin: ErrNotStarted, message: ErrNotStarted.Error(), typ: CLIENTErr, code: 3}
 	}
 	c.listenCtxCancel()
 	c.mainCtxCancel()
@@ -392,12 +399,6 @@ func (c *client) Write(b []byte) error {
 	})
 }
 
-// SetListenCallback Callback that will be called when the WS client captures a
-// transaction event
-func (c *client) SetListenCallback(fn func(block *Block, transaction *Transaction)) {
-	c.listenCallback = fn
-}
-
 func (c *client) WSQuery(typ string, data []byte) error {
 	subscribeMessage := Message{
 		IsWeb: false,
@@ -408,7 +409,7 @@ func (c *client) WSQuery(typ string, data []byte) error {
 	b, err := json.Marshal(subscribeMessage)
 	if err != nil {
 		c.lgr.Error(err)
-		return err
+		return &Error{origin: err, message: err.Error(), typ: PARAMETERErr, code: 4}
 	}
 
 	go func() {
@@ -463,22 +464,22 @@ func (c *client) LastBlock(chainName, chainVersion *string) (*LastBlock, error) 
 	defer fasthttp.ReleaseResponse(resp)
 	if err := c.httpClient.Do(req, resp); err != nil {
 		c.lgr.Error(err)
-		return nil, err
+		return nil, &Error{origin: err, message: err.Error(), typ: CLIENTErr, code: 5}
 	}
 
-	if resp.StatusCode() >= 400 && resp.StatusCode() < 500 {
+	if resp.StatusCode() >= 400 && resp.StatusCode() <= 500 {
 		var errorResponse Response
 		if err := json.Unmarshal(resp.Body(), &errorResponse); err != nil {
 			c.lgr.Error(err)
-			return nil, err
+			return nil, &Error{origin: err, message: err.Error(), typ: CLIENTErr, code: 6, status: resp.StatusCode(), response: resp}
 		}
 
 		c.lgr.Error(errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage())))
 		return nil, errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage()))
 	}
 
-	if resp.StatusCode() >= 500 {
-		return nil, errors.New(fasthttp.StatusMessage(resp.StatusCode()))
+	if resp.StatusCode() > 500 {
+		return nil, &Error{origin: errors.New(resp.String()), message: errors.New(fasthttp.StatusMessage(resp.StatusCode())).Error(), typ: CLIENTErr, code: 7, status: resp.StatusCode(), response: resp}
 	}
 
 	if resp.StatusCode() != 200 {
@@ -487,7 +488,7 @@ func (c *client) LastBlock(chainName, chainVersion *string) (*LastBlock, error) 
 
 	if err := json.Unmarshal(resp.Body(), &lastBlock); err != nil {
 		c.lgr.Error(err)
-		return nil, err
+		return nil, &Error{origin: err, message: err.Error(), typ: CLIENTErr, code: 8, status: resp.StatusCode(), response: resp}
 	}
 
 	return &lastBlock, nil
@@ -495,7 +496,7 @@ func (c *client) LastBlock(chainName, chainVersion *string) (*LastBlock, error) 
 
 func (c *client) Tx(id string, signature string, chainName, chainVersion *string) (*Transaction, error) {
 	if id == "" {
-		return nil, errors.New("invalid tx id")
+		return nil, &Error{origin: errors.New("invalid tx id"), message: "invalid tx id", typ: PARAMETERErr, code: 9}
 	}
 
 	var txResponse Response
@@ -1030,6 +1031,9 @@ func (c *client) connect(reconnect bool) (*websocket.Conn, error) {
 				headers.Add(string(kk), string(vv))
 			}
 			conn, response, err := c.dialer.DialContext(c.ctx, c.wsURL.String(), headers)
+			if err != nil {
+				c.callErrorCallbacks(err)
+			}
 			if err != nil && response != nil {
 				_ = response.Body.Close()
 			}
@@ -1039,6 +1043,7 @@ func (c *client) connect(reconnect bool) (*websocket.Conn, error) {
 			if response != nil && response.StatusCode >= 400 {
 				c.connected = false
 				err = errors.New(response.Status)
+				c.callErrorCallbacks(err)
 			}
 			c.mut.Unlock()
 
@@ -1176,7 +1181,7 @@ func (c *client) listen() {
 				continue
 			}
 
-			if c.listenCallback != nil {
+			if c.listenCallbacks != nil {
 				switch received.MessageType {
 				case websocket.TextMessage:
 					if !json.Valid(received.ReadingMessage) {
@@ -1200,6 +1205,7 @@ func (c *client) ping() {
 				_, err := c.connect(false)
 				if err != nil {
 					c.lgr.Error(err)
+					c.callErrorCallbacks(err)
 					continue
 				}
 
@@ -1212,6 +1218,7 @@ func (c *client) ping() {
 					}
 					if err = c.Subscribe(addrs, c.subscribedSignedData, c.subscribedTypes...); err != nil {
 						c.lgr.Error(err)
+						c.callErrorCallbacks(err)
 					}
 				}
 			} else {
@@ -1395,7 +1402,7 @@ func (c *client) parseIncoming(msg []byte) {
 				c.lgr.Error(err)
 				return
 			}
-			c.listenCallback(&block, nil)
+			c.callListenCallbacks(&block, nil)
 			break
 		case float64(1):
 			bb, _ := json.Marshal(incomingMsg.Data)
@@ -1403,7 +1410,7 @@ func (c *client) parseIncoming(msg []byte) {
 				c.lgr.Error(err)
 				return
 			}
-			c.listenCallback(nil, &transaction)
+			c.callListenCallbacks(nil, &transaction)
 			break
 		case float64(2):
 			if incomingMsg.State != nil && *incomingMsg.State == OK {
@@ -1417,7 +1424,17 @@ func (c *client) parseIncoming(msg []byte) {
 		return
 	}
 
-	c.listenCallback(nil, &transaction)
+	c.callListenCallbacks(nil, &transaction)
+}
+
+func (c *client) callListenCallbacks(bl *Block, trn *Transaction) {
+	if len(c.listenCallbacks) == 0 {
+		return
+	}
+
+	for i := 0; i < len(c.listenCallbacks); i++ {
+		go c.listenCallbacks[i](bl, trn)
+	}
 }
 
 func (c *client) callRetrievers() {
@@ -1426,4 +1443,14 @@ func (c *client) callRetrievers() {
 	}
 
 	time.Sleep(100 * time.Millisecond)
+}
+
+func (c *client) callErrorCallbacks(err error) {
+	if len(c.errorCallbacks) == 0 {
+		return
+	}
+
+	for i := 0; i < len(c.errorCallbacks); i++ {
+		go c.errorCallbacks[i](err)
+	}
 }

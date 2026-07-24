@@ -18,7 +18,7 @@ type transport struct {
 	certs             []tls.Certificate
 }
 
-func newTransport(pool *x509.CertPool, verbose bool, insecure bool, customFingerprint *string, certs []tls.Certificate) (*transport, error) {
+func newTransport(pool *x509.CertPool, verbose bool, insecure bool, customFingerprint *string, certs []tls.Certificate) *transport {
 	return &transport{
 		verbose:           verbose,
 		insecure:          insecure,
@@ -32,7 +32,7 @@ func newTransport(pool *x509.CertPool, verbose bool, insecure bool, customFinger
 				return verifyPeer(rawCerts, verifiedChains, customFingerprint)
 			},
 		},
-	}, nil
+	}
 }
 
 func (r *transport) RoundTrip(hc *fasthttp.HostClient, req *fasthttp.Request, resp *fasthttp.Response) (retry bool, err error) {
