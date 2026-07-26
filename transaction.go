@@ -63,6 +63,7 @@ const (
 	TypeMultiTransferSent     Type = "multi_transfer_sent"
 	TypeMultiBackup           Type = "multi_backup"
 	TypeMultiDataRoom         Type = "multi_data_room"
+	TypeMultiCollection       Type = "multi_collection"
 	TypePasswdData            Type = "passwd_data"
 	TypePasswdRoom            Type = "passwd_room"
 	TypePasswdRoomPolicy      Type = "passwd_room_policy"
@@ -72,7 +73,9 @@ const (
 	TypePasswdRoomDataPolicy  Type = "passwd_room_data_policy"
 	TypeDataV2                Type = "datav2"
 	TypeDataV2Policy          Type = "datav2_policy"
-	TypeDataV2Collection      Type = "datav2_collection"
+	TypeCollection            Type = "coll"
+	TypeCollectionPolicy      Type = "coll_policy"
+	TypeDataV2Collection      Type = "datav2_coll"
 )
 
 func (t Type) IsValid() bool {
@@ -131,6 +134,7 @@ var TypesSlice = []Type{
 	TypeMultiTransferSent,
 	TypeMultiBackup,
 	TypeMultiDataRoom,
+	TypeMultiCollection,
 	TypePasswdData,
 	TypePasswdRoom,
 	TypePasswdRoomPolicy,
@@ -140,6 +144,8 @@ var TypesSlice = []Type{
 	TypePasswdRoomDataPolicy,
 	TypeDataV2,
 	TypeDataV2Policy,
+	TypeCollection,
+	TypeCollectionPolicy,
 	TypeDataV2Collection,
 }
 
