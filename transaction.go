@@ -64,6 +64,7 @@ const (
 	TypeMultiBackup           Type = "multi_backup"
 	TypeMultiDataRoom         Type = "multi_data_room"
 	TypeMultiCollection       Type = "multi_collection"
+	TypeMultiDataV2           Type = "multi_dataV2"
 	TypePasswdData            Type = "passwd_data"
 	TypePasswdRoom            Type = "passwd_room"
 	TypePasswdRoomPolicy      Type = "passwd_room_policy"
@@ -76,6 +77,7 @@ const (
 	TypeCollection            Type = "coll"
 	TypeCollectionPolicy      Type = "coll_policy"
 	TypeDataV2Collection      Type = "datav2_coll"
+	TypeDataV2F               Type = "datav2F"
 )
 
 func (t Type) IsValid() bool {
@@ -135,6 +137,7 @@ var TypesSlice = []Type{
 	TypeMultiBackup,
 	TypeMultiDataRoom,
 	TypeMultiCollection,
+	TypeMultiDataV2,
 	TypePasswdData,
 	TypePasswdRoom,
 	TypePasswdRoomPolicy,
@@ -147,6 +150,7 @@ var TypesSlice = []Type{
 	TypeCollection,
 	TypeCollectionPolicy,
 	TypeDataV2Collection,
+	TypeDataV2F,
 }
 
 // Transaction read node transaction model
