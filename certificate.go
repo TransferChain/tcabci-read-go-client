@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	fingerprint = "dfb514f8d8d8add853dc4f88351b6af64acfb9b8faa3e65fa65de8004e284624"
+	fingerprint = "27dec11ab21f4299d56e5965a8dc28623d2441cb136fbe2b1ea3896c81b1a653"
 )
 
 func verifyPeer(rawCerts [][]byte, _ [][]*x509.Certificate, customFingerprint *string) error {
