@@ -58,6 +58,8 @@ const (
 	TypeDataRoomData          Type = "data_room_data"
 	TypeDataRoomDataDelete    Type = "data_room_data_delete"
 	TypeDataRoomDataPolicy    Type = "data_room_data_policy"
+	TypeDataRoomE             Type = "data_roomE"
+	TypeDataRoomEData         Type = "data_roomE_data"
 	TypeMultiStorage          Type = "multi_storage"
 	TypeMultiTransfer         Type = "multi_transfer"
 	TypeMultiTransferSent     Type = "multi_transfer_sent"
@@ -131,6 +133,8 @@ var TypesSlice = []Type{
 	TypeDataRoomData,
 	TypeDataRoomDataDelete,
 	TypeDataRoomDataPolicy,
+	TypeDataRoomE,
+	TypeDataRoomEData,
 	TypeMultiStorage,
 	TypeMultiTransfer,
 	TypeMultiTransferSent,
