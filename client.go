@@ -18,13 +18,15 @@ package tcabcireadgoclient
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"runtime"
@@ -45,23 +47,12 @@ var ErrAlreadyStarted = errors.New("already started")
 var ErrNotStarted = errors.New("not started yet")
 
 const (
-	retryingSecond   = 25
-	retryingInterval = time.Second * retryingSecond
-	// Time allowed to read the next pong message from the peer.
-	pongWait = 10 * time.Second
-	// Send pings to peer with this period. Must be less than pongWait.
-	pingPeriod           = (pongWait * 9) / 10
-	HandshakeTimeout     = 7 * time.Second
-	writeTimeout         = 15 * time.Millisecond
-	connectionErrorLimit = 64
-)
-
-type typ int
-
-const (
-	mclose  typ = 0
-	ping    typ = 1
-	message typ = 2
+	HandshakeTimeout = 7 * time.Second
+	writeTimeout     = 7 * time.Second
+	enqueueTimeout   = 100 * time.Millisecond
+	pongWait         = 30 * time.Second
+	pingPeriod       = 10 * time.Second
+	maxMessageSize   = 16 * 1024 * 1024
 )
 
 // Client TCABCI Read Node Websocket Client
@@ -99,49 +90,30 @@ type Client interface {
 
 type client struct {
 	ctx                  context.Context
-	mainCtx              context.Context
-	mainCtxCancel        context.CancelFunc
-	conn                 *websocket.Conn
 	lgr                  Logger
 	mode                 Mode
-	verbose              bool
 	address              string
-	wsAddress            string
+	wsURL                *url.URL
 	chainName            string
 	chainVersion         string
-	customFingerprint    *string
-	cert                 io.Reader
-	insecureSkipVerify   bool
-	url                  *url.URL
-	wsURL                *url.URL
+	version              string
 	retrieveCallbacks    []func()
+	listenCallbacks      []func(*Block, *Transaction)
+	errorCallbacks       []func(error)
 	headers              fasthttp.RequestHeader
 	wsHeaders            fasthttp.RequestHeader
-	version              string
-	subscribed           bool
-	connected            bool
-	started              bool
-	handshakeTimeout     time.Duration
-	listenCallbacks      []func(block *Block, transaction *Transaction)
-	errorCallbacks       []func(err error)
-	errorCount           int32
+	mut                  sync.RWMutex
+	lifecycle            sync.Mutex
+	httpMu               sync.RWMutex
+	session              *wsSession
 	subscribedAddresses  map[string]bool
 	subscribedSignedData map[string]string
 	subscribedTypes      []Type
-	listenCtx            context.Context
-	listenCtxCancel      context.CancelFunc
-	mut                  sync.RWMutex
-	sendBuf              chan sendMsg
-	pingTicker           *time.Ticker
+	subscriptionRevision uint64
 	dialer               *websocket.Dialer
-	receivedCh           chan Received
 	httpClient           *fasthttp.Client
-}
-
-type sendMsg struct {
-	typ        typ
-	messageTyp int
-	msg        []byte
+	transport            *transport
+	callbackSlots        chan struct{}
 }
 
 // NewClient make ws client
@@ -155,12 +127,25 @@ func NewClientContext(ctx context.Context, address string, wsAddress string, cha
 }
 
 func newClient(ctx context.Context, address string, wsAddress string, chainName, chainVersion string, insecure bool, customFingerprint *string, cert io.Reader) (Client, error) {
+	if ctx == nil {
+		return nil, errors.New("nil context")
+	}
+	if customFingerprint != nil {
+		value := *customFingerprint
+		customFingerprint = &value
+		if value != "" {
+			pin, err := hex.DecodeString(value)
+			if err != nil || len(pin) != 32 {
+				return nil, errors.New("invalid certificate pin")
+			}
+		}
+	}
 	aURL, err := url.Parse(address)
 	if err != nil {
 		return nil, err
 	}
 
-	if aURL.Scheme != "https" && aURL.Scheme != "http" {
+	if (aURL.Scheme != "https" && aURL.Scheme != "http") || aURL.Hostname() == "" {
 		return nil, errors.New("invalid address")
 	}
 
@@ -169,60 +154,78 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 		return nil, err
 	}
 
-	if wsURL.Scheme != "wss" && wsURL.Scheme != "ws" {
+	if (wsURL.Scheme != "wss" && wsURL.Scheme != "ws") || wsURL.Hostname() == "" {
 		return nil, errors.New("invalid websocket address")
 	}
 
 	maxIdleConnDuration, _ := time.ParseDuration("3s")
 
-	var certs []tls.Certificate
+	// cert is a public server certificate pin, not an mTLS client identity.
 	if cert != nil {
-		ir, err := io.ReadAll(cert)
+		raw, err := io.ReadAll(io.LimitReader(cert, 1024*1024+1))
+		defer clear(raw)
 		if err != nil {
-			return nil, err
+			return nil, errors.New("cannot read server certificate")
 		}
-
-		certs = append(certs, tls.Certificate{
-			Certificate: [][]byte{ir},
-		})
+		if len(raw) > 1024*1024 {
+			return nil, errors.New("server certificate too large")
+		}
+		der := raw
+		if block, _ := pem.Decode(raw); block != nil {
+			if block.Type != "CERTIFICATE" {
+				return nil, errors.New("expected server certificate")
+			}
+			der = block.Bytes
+		}
+		parsed, err := x509.ParseCertificate(der)
+		if err != nil {
+			return nil, errors.New("invalid server certificate")
+		}
+		sum := sha256.Sum256(parsed.Raw)
+		certPin := hex.EncodeToString(sum[:])
+		// Explicit empty fingerprint always keeps pinning disabled.
+		if customFingerprint == nil {
+			customFingerprint = &certPin
+		} else if *customFingerprint != "" && !strings.EqualFold(*customFingerprint, certPin) {
+			return nil, errors.New("certificate and fingerprint disagree")
+		}
 	}
 
 	var tlsConfig *tls.Config
-	if strings.HasPrefix(address, "https://") || strings.HasPrefix(wsAddress, "wss://") || cert != nil {
+	if aURL.Scheme == "https" || wsURL.Scheme == "wss" || cert != nil {
 		pool, err := x509.SystemCertPool()
 		if err != nil {
 			return nil, err
 		}
 
 		tlsConfig = &tls.Config{
-			ClientCAs:          pool,
-			Certificates:       certs,
-			InsecureSkipVerify: insecure,
-			VerifyPeerCertificate: func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
-				return verifyPeer(rawCerts, verifiedChains, customFingerprint)
+			RootCAs:            pool,
+			MinVersion:         tls.VersionTLS12,
+			InsecureSkipVerify: insecure, // #nosec G402 -- Explicit caller opt-out; optional pinning remains independent.
+			VerifyConnection: func(state tls.ConnectionState) error {
+				var raw [][]byte
+				if len(state.PeerCertificates) > 0 {
+					raw = [][]byte{state.PeerCertificates[0].Raw}
+				}
+				return verifyPeer(raw, state.VerifiedChains, customFingerprint)
 			},
 		}
 	}
 
 	c := &client{
 		ctx:                  ctx,
-		version:              "1.6.35",
+		callbackSlots:        make(chan struct{}, 16),
+		version:              "1.6.36",
 		lgr:                  NewLogger(ctx),
 		mode:                 Subscription,
 		address:              address,
-		wsAddress:            wsAddress,
 		chainName:            chainName,
 		chainVersion:         chainVersion,
-		url:                  aURL,
 		wsURL:                wsURL,
 		retrieveCallbacks:    make([]func(), 0),
-		customFingerprint:    customFingerprint,
-		cert:                 cert,
-		insecureSkipVerify:   insecure,
 		subscribedAddresses:  make(map[string]bool),
 		subscribedSignedData: make(map[string]string),
 		subscribedTypes:      make([]Type, 0),
-		handshakeTimeout:     HandshakeTimeout,
 		listenCallbacks:      make([]func(block *Block, transaction *Transaction), 0),
 		errorCallbacks:       make([]func(err error), 0),
 		dialer: &websocket.Dialer{
@@ -230,11 +233,10 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 			HandshakeTimeout:  HandshakeTimeout,
 			ReadBufferSize:    5 * 1024 * 1024,
 			WriteBufferSize:   5 * 1024 * 1024,
-			EnableCompression: true,
+			EnableCompression: false,
 		},
-		sendBuf:    make(chan sendMsg, runtime.NumCPU()),
-		receivedCh: make(chan Received, runtime.NumCPU()),
 		httpClient: &fasthttp.Client{
+			MaxResponseBodySize:           16 * 1024 * 1024,
 			WriteTimeout:                  7 * time.Second,
 			ReadTimeout:                   7 * time.Second,
 			NoDefaultUserAgentHeader:      true,
@@ -249,7 +251,8 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 		},
 	}
 
-	c.httpClient.Transport = newTransport(nil, false, insecure, customFingerprint, certs)
+	c.transport = &transport{}
+	c.httpClient.Transport = c.transport
 
 	c.headers.Set("Client", fmt.Sprintf("tcabaci-read-go-client/%s (%s;%s)", c.version, runtime.GOOS, runtime.GOARCH))
 	c.headers.Set("User-Agent", fmt.Sprintf("tcabaci-read-go-client/%s (%s;%s)", c.version, runtime.GOOS, runtime.GOARCH))
@@ -259,178 +262,133 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 	return c, nil
 }
 
+// WithMode applies to the next connection and subscription update.
 func (c *client) WithMode(mode Mode) Client {
+	c.mut.Lock()
 	c.mode = mode
+	c.subscriptionRevision++
+	c.notifySubscriptionLocked()
+	c.mut.Unlock()
 	return c
 }
 
 func (c *client) WithProxy(proxyURL *url.URL) Client {
-	c.httpClient.Dial = fasthttpproxy.FasthttpHTTPDialerTimeout(proxyURL.String(), 0)
-	c.dialer.Proxy = http.ProxyURL(proxyURL)
+	c.httpMu.Lock()
+	defer c.httpMu.Unlock()
+	c.mut.Lock()
+	defer c.mut.Unlock()
+	if proxyURL == nil {
+		c.httpClient.Dial = (&fasthttp.TCPDialer{Concurrency: 4096, DNSCacheDuration: time.Hour}).Dial
+		c.dialer.Proxy = nil
+	} else {
+		proxy := *proxyURL
+		c.httpClient.Dial = fasthttpproxy.FasthttpHTTPDialerTimeout(proxy.String(), HandshakeTimeout)
+		c.dialer.Proxy = http.ProxyURL(&proxy)
+	}
+	c.httpClient.CloseIdleConnections()
 	return c
 }
 
 func (c *client) WithLogger(l Logger) Client {
-	c.lgr = l
+	if l != nil {
+		c.mut.Lock()
+		c.lgr = l
+		c.mut.Unlock()
+	}
 	return c
 }
 
+// SetVerbose logs status and response size only.
 func (c *client) SetVerbose(v bool) (Client, error) {
-	c.verbose = v
-
-	var certs []tls.Certificate
-	if c.cert != nil {
-		ir, err := io.ReadAll(c.cert)
-		if err != nil {
-			return nil, &Error{origin: err, message: err.Error(), typ: PARAMETERErr, code: 1}
-		}
-
-		certs = append(certs, tls.Certificate{
-			Certificate: [][]byte{ir},
-		})
-	}
-
-	pool, err := x509.SystemCertPool()
-	if err != nil {
-		return nil, &Error{origin: err, message: err.Error(), typ: SYSErr, code: 2}
-	}
-
-	c.httpClient.Transport = newTransport(pool, v, c.insecureSkipVerify, c.customFingerprint, certs)
-
+	c.transport.verbose.Store(v)
 	return c, nil
 }
 
-// SetListenCallback ...
-// Deprecated: use AddListenCallback/1
-func (c *client) SetListenCallback(fn func(block *Block, transaction *Transaction)) Client {
-	c.listenCallbacks = []func(block *Block, transaction *Transaction){fn}
+// Deprecated: use AddListenCallback.
+func (c *client) SetListenCallback(fn func(*Block, *Transaction)) Client {
+	c.mut.Lock()
+	defer c.mut.Unlock()
+	c.listenCallbacks = nil
+	if fn != nil {
+		c.listenCallbacks = append(c.listenCallbacks, fn)
+	}
 	return c
 }
 
-// AddListenCallback callback that will be called when the WS client captures a
-// transaction event
-func (c *client) AddListenCallback(fn func(block *Block, transaction *Transaction)) Client {
-	c.listenCallbacks = append(c.listenCallbacks, fn)
+func (c *client) AddListenCallback(fn func(*Block, *Transaction)) Client {
+	if fn != nil {
+		c.mut.Lock()
+		c.listenCallbacks = append(c.listenCallbacks, fn)
+		c.mut.Unlock()
+	}
 	return c
 }
 
 func (c *client) AddRetrieveCallback(fn func()) Client {
-	c.retrieveCallbacks = append(c.retrieveCallbacks, fn)
+	if fn != nil {
+		c.mut.Lock()
+		c.retrieveCallbacks = append(c.retrieveCallbacks, fn)
+		c.mut.Unlock()
+	}
 	return c
 }
 
-func (c *client) AddErrorCallback(fn func(err error)) Client {
-	c.errorCallbacks = append(c.errorCallbacks, fn)
+func (c *client) AddErrorCallback(fn func(error)) Client {
+	if fn != nil {
+		c.mut.Lock()
+		c.errorCallbacks = append(c.errorCallbacks, fn)
+		c.mut.Unlock()
+	}
 	return c
 }
 
 func (c *client) AddHeader(key, value string) Client {
+	c.mut.Lock()
+	defer c.mut.Unlock()
 	c.headers.Add(key, value)
 	return c
 }
 
 func (c *client) RemoveHeader(key string) Client {
+	c.mut.Lock()
+	defer c.mut.Unlock()
 	c.headers.Del(key)
 	return c
 }
 
 func (c *client) AddWSHeader(key, value string) Client {
+	c.mut.Lock()
+	defer c.mut.Unlock()
 	c.wsHeaders.Add(key, value)
 	return c
 }
 
 func (c *client) RemoveWSHeader(key string) Client {
+	c.mut.Lock()
+	defer c.mut.Unlock()
 	c.wsHeaders.Del(key)
 	return c
 }
 
-// Start contexts and ws client and client retriever
-func (c *client) Start() error {
-	if c.getStarted() {
-		return ErrAlreadyStarted
-	}
-	c.mut.Lock()
-	c.mainCtx, c.mainCtxCancel = context.WithCancel(c.ctx)
-	c.listenCtx, c.listenCtxCancel = context.WithCancel(c.mainCtx)
-	c.sendBuf = make(chan sendMsg, runtime.NumCPU())
-	c.receivedCh = make(chan Received, runtime.NumCPU())
-	c.pingTicker = time.NewTicker(pingPeriod)
-	c.mut.Unlock()
-	c.setStarted(true)
-
-	//
-	go func() {
-		_, _ = c.connect(false)
-	}()
-	go c.listen()
-	go c.listenWrite()
-	go c.ping()
-
-	return nil
+func (c *client) copyHeaders(req *fasthttp.Request) {
+	c.mut.RLock()
+	defer c.mut.RUnlock()
+	c.headers.CopyTo(&req.Header)
 }
 
-// Stop ws client and ws contexts
-func (c *client) Stop() error {
-	if !c.getStarted() {
-		return &Error{origin: ErrNotStarted, message: ErrNotStarted.Error(), typ: CLIENTErr, code: 3}
-	}
-	c.listenCtxCancel()
-	c.mainCtxCancel()
-	if c.pingTicker != nil {
-		c.pingTicker.Stop()
-	}
-	c.closeWS()
-	c.httpClient.CloseIdleConnections()
-	c.httpClient.ConnPoolStrategy = fasthttp.FIFO
-
-	//
-	c.setSubscribed(false)
-	c.setStarted(false)
-	c.setConnected(false)
-
-	return nil
+func (c *client) do(req *fasthttp.Request, resp *fasthttp.Response) error {
+	c.httpMu.RLock()
+	defer c.httpMu.RUnlock()
+	return c.httpClient.Do(req, resp)
 }
 
-func (c *client) Write(b []byte) error {
-	return c.write(sendMsg{
-		typ:        message,
-		messageTyp: websocket.TextMessage,
-		msg:        b,
-	})
-}
-
-func (c *client) WSQuery(typ string, data []byte) error {
-	subscribeMessage := Message{
-		IsWeb: false,
-		Type:  MessageType(typ),
-		Data:  data,
+func (c *client) logError(err error) {
+	c.mut.RLock()
+	lgr := c.lgr
+	c.mut.RUnlock()
+	if lgr != nil {
+		lgr.Error("read node request failed")
 	}
-
-	b, err := json.Marshal(subscribeMessage)
-	if err != nil {
-		c.lgr.Error(err)
-		return &Error{origin: err, message: err.Error(), typ: PARAMETERErr, code: 4}
-	}
-
-	go func() {
-		c.sendBuf <- sendMsg{
-			typ:        message,
-			messageTyp: websocket.TextMessage,
-			msg:        b,
-		}
-	}()
-
-	return nil
-}
-
-// Subscribe to given addresses
-func (c *client) Subscribe(addresses []string, signedDatas map[string]string, txTypes ...Type) error {
-	return c.subscribe(false, addresses, signedDatas, txTypes...)
-}
-
-// Unsubscribe to given addresses
-func (c *client) Unsubscribe() error {
-	return c.unsubscribe(false)
 }
 
 // LastBlock fetch last block in blockchain network
@@ -439,16 +397,14 @@ func (c *client) LastBlock(chainName, chainVersion *string) (*LastBlock, error) 
 
 	u := "limit=1&offset=0"
 	if chainName != nil && chainVersion != nil {
-		u += "&chain_name=" + *chainName + "&chain_version=" + *chainVersion
+		u += "&chain_name=" + url.QueryEscape(*chainName) + "&chain_version=" + url.QueryEscape(*chainVersion)
 	} else {
-		u += "&chain_name=" + c.chainName + "&chain_version=" + c.chainVersion
+		u += "&chain_name=" + url.QueryEscape(c.chainName) + "&chain_version=" + url.QueryEscape(c.chainVersion)
 	}
 
 	req := fasthttp.AcquireRequest()
 	defer fasthttp.ReleaseRequest(req)
-	for k, v := range c.headers.All() {
-		req.Header.SetBytesKV(k, v)
-	}
+	c.copyHeaders(req)
 	req.Header.Set("Content-Type", "application/json")
 
 	uri := fasthttp.AcquireURI()
@@ -462,24 +418,24 @@ func (c *client) LastBlock(chainName, chainVersion *string) (*LastBlock, error) 
 
 	resp := fasthttp.AcquireResponse()
 	defer fasthttp.ReleaseResponse(resp)
-	if err := c.httpClient.Do(req, resp); err != nil {
-		c.lgr.Error(err)
+	if err := c.do(req, resp); err != nil {
+		c.logError(err)
 		return nil, &Error{origin: err, message: err.Error(), typ: CLIENTErr, code: 5}
 	}
 
-	if resp.StatusCode() >= 400 && resp.StatusCode() <= 500 {
+	if resp.StatusCode() >= 400 && resp.StatusCode() < 500 {
 		var errorResponse Response
 		if err := json.Unmarshal(resp.Body(), &errorResponse); err != nil {
-			c.lgr.Error(err)
-			return nil, &Error{origin: err, message: err.Error(), typ: CLIENTErr, code: 6, status: resp.StatusCode(), response: resp}
+			c.logError(err)
+			return nil, &Error{origin: err, message: err.Error(), typ: CLIENTErr, code: 6, status: resp.StatusCode(), response: responseSnapshot(resp)}
 		}
 
-		c.lgr.Error(errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage())))
-		return nil, errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage()))
+		c.logError(errors.New("read node request rejected"))
+		return nil, errors.New("read node request rejected")
 	}
 
-	if resp.StatusCode() > 500 {
-		return nil, &Error{origin: errors.New(resp.String()), message: errors.New(fasthttp.StatusMessage(resp.StatusCode())).Error(), typ: CLIENTErr, code: 7, status: resp.StatusCode(), response: resp}
+	if resp.StatusCode() >= 500 {
+		return nil, &Error{origin: errors.New(fasthttp.StatusMessage(resp.StatusCode())), message: errors.New(fasthttp.StatusMessage(resp.StatusCode())).Error(), typ: CLIENTErr, code: 7, status: resp.StatusCode(), response: responseSnapshot(resp)}
 	}
 
 	if resp.StatusCode() != 200 {
@@ -487,8 +443,8 @@ func (c *client) LastBlock(chainName, chainVersion *string) (*LastBlock, error) 
 	}
 
 	if err := json.Unmarshal(resp.Body(), &lastBlock); err != nil {
-		c.lgr.Error(err)
-		return nil, &Error{origin: err, message: err.Error(), typ: CLIENTErr, code: 8, status: resp.StatusCode(), response: resp}
+		c.logError(err)
+		return nil, &Error{origin: err, message: err.Error(), typ: CLIENTErr, code: 8, status: resp.StatusCode(), response: responseSnapshot(resp)}
 	}
 
 	return &lastBlock, nil
@@ -504,9 +460,9 @@ func (c *client) Tx(id string, signature string, chainName, chainVersion *string
 
 	u := ""
 	if chainName != nil && chainVersion != nil {
-		u += "chain_name=" + *chainName + "&chain_version=" + *chainVersion
+		u += "chain_name=" + url.QueryEscape(*chainName) + "&chain_version=" + url.QueryEscape(*chainVersion)
 	} else {
-		u += "chain_name=" + c.chainName + "&chain_version=" + c.chainVersion
+		u += "chain_name=" + url.QueryEscape(c.chainName) + "&chain_version=" + url.QueryEscape(c.chainVersion)
 	}
 
 	req := fasthttp.AcquireRequest()
@@ -521,28 +477,26 @@ func (c *client) Tx(id string, signature string, chainName, chainVersion *string
 
 	req.SetURI(uri)
 
-	for k, v := range c.headers.All() {
-		req.Header.SetBytesKV(k, v)
-	}
+	c.copyHeaders(req)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Signature", signature)
 
 	resp := fasthttp.AcquireResponse()
 	defer fasthttp.ReleaseResponse(resp)
-	if err := c.httpClient.Do(req, resp); err != nil {
-		c.lgr.Error(err)
+	if err := c.do(req, resp); err != nil {
+		c.logError(err)
 		return nil, err
 	}
 
 	if resp.StatusCode() >= 400 && resp.StatusCode() < 500 {
 		var errorResponse Response
 		if err := json.Unmarshal(resp.Body(), &errorResponse); err != nil {
-			c.lgr.Error(err)
+			c.logError(err)
 			return nil, err
 		}
 
-		c.lgr.Error(errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage())))
-		return nil, errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage()))
+		c.logError(errors.New("read node request rejected"))
+		return nil, errors.New("read node request rejected")
 	}
 
 	if resp.StatusCode() >= 500 {
@@ -554,20 +508,26 @@ func (c *client) Tx(id string, signature string, chainName, chainVersion *string
 	}
 
 	if err := json.Unmarshal(resp.Body(), &txResponse); err != nil {
-		c.lgr.Error(err)
+		c.logError(err)
 		return nil, err
 	}
 
-	return txResponse.GetData().(*Transaction), nil
+	tx, ok := txResponse.GetData().(*Transaction)
+	if !ok || tx == nil {
+		return nil, errors.New("invalid transaction response")
+	}
+	return tx, nil
 }
 
 // TxSummary fetch summary with given parameters
 func (c *client) TxSummary(summary *Summary) (lastBlockHeight uint64, lastTransaction *Transaction, totalCount uint64, err error) {
-	if !summary.IsValid() {
+	if summary == nil || !summary.IsValid() {
 		err = errors.New("invalid parameters")
 		return 0, nil, 0, err
 	}
 
+	copy := *summary
+	summary = &copy
 	if summary.ChainName == nil {
 		summary.ChainName = &c.chainName
 	}
@@ -578,7 +538,7 @@ func (c *client) TxSummary(summary *Summary) (lastBlockHeight uint64, lastTransa
 
 	req, err := summary.ToRequest()
 	if err != nil {
-		c.lgr.Error(err)
+		c.logError(err)
 		return 0, nil, 0, err
 	}
 	defer fasthttp.ReleaseRequest(req)
@@ -591,9 +551,7 @@ func (c *client) TxSummary(summary *Summary) (lastBlockHeight uint64, lastTransa
 
 	req.SetURI(uri)
 
-	for k, v := range c.headers.All() {
-		req.Header.SetBytesKV(k, v)
-	}
+	c.copyHeaders(req)
 	req.Header.Set("Content-Type", "application/json")
 
 	var summaryResponse SummaryResponse
@@ -602,20 +560,20 @@ func (c *client) TxSummary(summary *Summary) (lastBlockHeight uint64, lastTransa
 	defer fasthttp.ReleaseResponse(resp)
 
 	req.Header.SetMethod(fasthttp.MethodPost)
-	if err = c.httpClient.Do(req, resp); err != nil {
-		c.lgr.Error(err)
+	if err = c.do(req, resp); err != nil {
+		c.logError(err)
 		return 0, nil, 0, err
 	}
 
 	if resp.StatusCode() >= 400 && resp.StatusCode() < 500 {
 		var errorResponse Response
 		if err := json.Unmarshal(resp.Body(), &errorResponse); err != nil {
-			c.lgr.Error(err)
+			c.logError(err)
 			return 0, nil, 0, err
 		}
 
-		c.lgr.Error(errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage())))
-		return 0, nil, 0, errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage()))
+		c.logError(errors.New("read node request rejected"))
+		return 0, nil, 0, errors.New("read node request rejected")
 	}
 
 	if resp.StatusCode() >= 500 {
@@ -627,7 +585,7 @@ func (c *client) TxSummary(summary *Summary) (lastBlockHeight uint64, lastTransa
 	}
 
 	if err = json.Unmarshal(resp.Body(), &summaryResponse); err != nil {
-		c.lgr.Error(err)
+		c.logError(err)
 		return 0, nil, 0, err
 	}
 
@@ -636,12 +594,14 @@ func (c *client) TxSummary(summary *Summary) (lastBlockHeight uint64, lastTransa
 
 // TxSearch search with given parameters
 func (c *client) TxSearch(search *Search) (txs []*Transaction, totalCount uint64, err error) {
-	if !search.IsValid() {
+	if search == nil || !search.IsValid() {
 		err = errors.New("invalid parameters")
-		c.lgr.Error(err)
+		c.logError(err)
 		return nil, 0, err
 	}
 
+	copy := *search
+	search = &copy
 	if search.ChainName == nil {
 		search.ChainName = &c.chainName
 	}
@@ -652,14 +612,12 @@ func (c *client) TxSearch(search *Search) (txs []*Transaction, totalCount uint64
 
 	req, err := search.ToRequest()
 	if err != nil {
-		c.lgr.Error(err)
+		c.logError(err)
 		return nil, 0, err
 	}
 	defer fasthttp.ReleaseRequest(req)
 
-	for k, v := range c.headers.All() {
-		req.Header.SetBytesKV(k, v)
-	}
+	c.copyHeaders(req)
 	req.Header.Set("Content-Type", "application/json")
 
 	uri := fasthttp.AcquireURI()
@@ -676,20 +634,20 @@ func (c *client) TxSearch(search *Search) (txs []*Transaction, totalCount uint64
 	defer fasthttp.ReleaseResponse(resp)
 
 	req.Header.SetMethod(fasthttp.MethodPost)
-	if err = c.httpClient.Do(req, resp); err != nil {
-		c.lgr.Error(err)
+	if err = c.do(req, resp); err != nil {
+		c.logError(err)
 		return nil, 0, err
 	}
 
 	if resp.StatusCode() >= 400 && resp.StatusCode() < 500 {
 		var errorResponse Response
 		if err := json.Unmarshal(resp.Body(), &errorResponse); err != nil {
-			c.lgr.Error(err)
+			c.logError(err)
 			return nil, 0, err
 		}
 
-		c.lgr.Error(errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage())))
-		return nil, 0, errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage()))
+		c.logError(errors.New("read node request rejected"))
+		return nil, 0, errors.New("read node request rejected")
 	}
 
 	if resp.StatusCode() >= 500 {
@@ -701,7 +659,7 @@ func (c *client) TxSearch(search *Search) (txs []*Transaction, totalCount uint64
 	}
 
 	if err = json.Unmarshal(resp.Body(), &searchResponse); err != nil {
-		c.lgr.Error(err)
+		c.logError(err)
 		return nil, 0, err
 	}
 
@@ -711,7 +669,7 @@ func (c *client) TxSearch(search *Search) (txs []*Transaction, totalCount uint64
 func (c *client) Broadcast(id string, version uint32, typ Type, data []byte, additionalData, cipherData *[]byte, senderAddress, recipientAddress string, sign []byte, fee uint64) (*BroadcastResponse, error) {
 	resp, err := c.broadcast(id, version, typ, data, additionalData, cipherData, senderAddress, recipientAddress, sign, fee, false, false)
 	if err != nil {
-		c.lgr.Error(err)
+		c.logError(err)
 		return nil, err
 	}
 
@@ -721,7 +679,7 @@ func (c *client) Broadcast(id string, version uint32, typ Type, data []byte, add
 func (c *client) BroadcastSync(id string, version uint32, typ Type, data []byte, additionalData, cipherData *[]byte, senderAddress, recipientAddress string, sign []byte, fee uint64) (*BroadcastResponse, error) {
 	resp, err := c.broadcast(id, version, typ, data, additionalData, cipherData, senderAddress, recipientAddress, sign, fee, false, true)
 	if err != nil {
-		c.lgr.Error(err)
+		c.logError(err)
 		return nil, err
 	}
 
@@ -731,7 +689,7 @@ func (c *client) BroadcastSync(id string, version uint32, typ Type, data []byte,
 func (c *client) BroadcastCommit(id string, version uint32, typ Type, data []byte, additionalData, cipherData *[]byte, senderAddress, recipientAddress string, sign []byte, fee uint64) (*BroadcastResponse, error) {
 	resp, err := c.broadcast(id, version, typ, data, additionalData, cipherData, senderAddress, recipientAddress, sign, fee, true, false)
 	if err != nil {
-		c.lgr.Error(err)
+		c.logError(err)
 		return nil, err
 	}
 
@@ -747,9 +705,7 @@ func (c *client) Query(method string, path string, data []byte, headers map[stri
 	req := fasthttp.AcquireRequest()
 	defer fasthttp.ReleaseRequest(req)
 
-	for k, v := range c.headers.All() {
-		req.Header.SetBytesKV(k, v)
-	}
+	c.copyHeaders(req)
 	req.Header.Set("Content-Type", "application/json")
 	for k, v := range headers {
 		for _, vv := range v {
@@ -773,33 +729,33 @@ func (c *client) Query(method string, path string, data []byte, headers map[stri
 	defer fasthttp.ReleaseResponse(resp)
 
 	req.Header.SetMethod(method)
-	if err = c.httpClient.Do(req, resp); err != nil {
-		c.lgr.Error(err)
+	if err = c.do(req, resp); err != nil {
+		c.logError(err)
 		return nil, err
 	}
 
 	if resp.StatusCode() >= 400 && resp.StatusCode() < 500 {
 		var errorResponse Response
 		if err := json.Unmarshal(resp.Body(), &errorResponse); err != nil {
-			c.lgr.Error(err)
+			c.logError(err)
 			return nil, err
 		}
 
-		c.lgr.Error(errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage())))
-		return nil, errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage()))
+		c.logError(errors.New("read node request rejected"))
+		return nil, errors.New("read node request rejected")
 	}
 
 	if resp.StatusCode() >= 500 {
 		return nil, errors.New(fasthttp.StatusMessage(resp.StatusCode()))
 	}
 
-	if resp.StatusCode() < 200 || resp.StatusCode() > 300 {
+	if resp.StatusCode() < 200 || resp.StatusCode() >= 300 {
 		return nil, errors.New("unexpected status code: " + strconv.Itoa(resp.StatusCode()))
 	}
 
 	var response Response
 	if err = json.Unmarshal(resp.Body(), &response); err != nil {
-		c.lgr.Error(err)
+		c.logError(err)
 		return nil, err
 	}
 
@@ -811,9 +767,7 @@ func (c *client) FetchNS(identifier string) (*NS, error) {
 	req := fasthttp.AcquireRequest()
 	defer fasthttp.ReleaseRequest(req)
 
-	for k, v := range c.headers.All() {
-		req.Header.SetBytesKV(k, v)
-	}
+	c.copyHeaders(req)
 	req.Header.Set("Content-Type", "application/json")
 
 	uri := fasthttp.AcquireURI()
@@ -828,20 +782,20 @@ func (c *client) FetchNS(identifier string) (*NS, error) {
 	defer fasthttp.ReleaseResponse(resp)
 
 	req.Header.SetMethod(fasthttp.MethodGet)
-	if err = c.httpClient.Do(req, resp); err != nil {
-		c.lgr.Error(err)
+	if err = c.do(req, resp); err != nil {
+		c.logError(err)
 		return nil, err
 	}
 
 	if resp.StatusCode() >= 400 && resp.StatusCode() < 500 {
 		var errorResponse Response
 		if err := json.Unmarshal(resp.Body(), &errorResponse); err != nil {
-			c.lgr.Error(err)
+			c.logError(err)
 			return nil, err
 		}
 
-		c.lgr.Error(errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage())))
-		return nil, errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage()))
+		c.logError(errors.New("read node request rejected"))
+		return nil, errors.New("read node request rejected")
 	}
 
 	if resp.StatusCode() >= 500 {
@@ -855,16 +809,20 @@ func (c *client) FetchNS(identifier string) (*NS, error) {
 	var response Response
 	response.Data = &NS{}
 	if err = json.Unmarshal(resp.Body(), &response); err != nil {
-		c.lgr.Error(err)
+		c.logError(err)
 		return nil, err
 	}
 
-	return response.Data.(*NS), nil
+	ns, ok := response.Data.(*NS)
+	if !ok || ns == nil {
+		return nil, errors.New("invalid namespace response")
+	}
+	return ns, nil
 }
 
 func (c *client) broadcast(id string, version uint32, typ Type, data []byte, additionalData, cipherData *[]byte, senderAddress, recipientAddress string, sign []byte, fee uint64, commit, sync bool) (*BroadcastResponse, error) {
 	if !typ.IsValid() {
-		c.lgr.Error("invalid type")
+		c.logError(errors.New("invalid type"))
 		return nil, errors.New("invalid type")
 	}
 
@@ -883,14 +841,12 @@ func (c *client) broadcast(id string, version uint32, typ Type, data []byte, add
 
 	req, err := broadcast.ToRequest()
 	if err != nil {
-		c.lgr.Error(err)
+		c.logError(err)
 		return nil, err
 	}
 	defer fasthttp.ReleaseRequest(req)
 
-	for k, v := range c.headers.All() {
-		req.Header.SetBytesKV(k, v)
-	}
+	c.copyHeaders(req)
 	req.Header.Set("Content-Type", "application/json")
 
 	uri := fasthttp.AcquireURI()
@@ -905,20 +861,20 @@ func (c *client) broadcast(id string, version uint32, typ Type, data []byte, add
 	defer fasthttp.ReleaseResponse(resp)
 
 	req.Header.SetMethod(fasthttp.MethodPost)
-	if err = c.httpClient.Do(req, resp); err != nil {
-		c.lgr.Error(err)
+	if err = c.do(req, resp); err != nil {
+		c.logError(err)
 		return nil, err
 	}
 
 	if resp.StatusCode() >= 400 && resp.StatusCode() < 500 {
 		var errorResponse Response
 		if err := json.Unmarshal(resp.Body(), &errorResponse); err != nil {
-			c.lgr.Error(err)
+			c.logError(err)
 			return nil, err
 		}
 
-		c.lgr.Error(errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage())))
-		return nil, errors.New(StringOR(errorResponse.GetMessage(), errorResponse.GetMessage()))
+		c.logError(errors.New("read node request rejected"))
+		return nil, errors.New("read node request rejected")
 	}
 
 	if resp.StatusCode() >= 500 {
@@ -941,516 +897,4 @@ func (c *client) broadcast(id string, version uint32, typ Type, data []byte, add
 func (c *client) parsedAddr() []string {
 	uri, _ := url.Parse(c.address)
 	return []string{uri.Scheme, uri.Host}
-}
-
-func (c *client) setStarted(b bool) {
-	c.mut.Lock()
-	c.started = b
-	c.mut.Unlock()
-}
-
-func (c *client) getStarted() bool {
-	return c.started
-}
-
-func (c *client) setConnected(b bool) {
-	c.mut.Lock()
-	c.connected = b
-	c.mut.Unlock()
-}
-
-func (c *client) isConnected() bool {
-	return c.connected
-}
-
-func (c *client) setSubscribed(b bool) {
-	c.mut.Lock()
-	c.subscribed = b
-	c.mut.Unlock()
-}
-
-func (c *client) getSubscribed() bool {
-	return c.subscribed
-}
-
-func (c *client) getConn() *websocket.Conn {
-	return c.conn
-}
-
-func (c *client) getSubscribedAddress() map[string]bool {
-	return c.subscribedAddresses
-}
-
-func (c *client) setSubscribedAddress(v map[string]bool) {
-	c.mut.Lock()
-	c.subscribedAddresses = v
-	c.mut.Unlock()
-}
-
-func (c *client) setSubscribedTypes(types ...Type) {
-	if len(types) == 0 {
-		return
-	}
-
-	c.mut.Lock()
-	c.subscribedTypes = types
-	c.mut.Unlock()
-}
-
-func (c *client) getSubscribedSignedDatas() map[string]string {
-	return c.subscribedSignedData
-}
-
-func (c *client) setSubscribedSignedDatas(v map[string]string) {
-	c.mut.Lock()
-	c.subscribedSignedData = v
-	c.mut.Unlock()
-}
-
-func (c *client) connect(reconnect bool) (*websocket.Conn, error) {
-	if c.getConn() != nil {
-		return c.getConn(), nil
-	}
-
-	if c.errorCount > connectionErrorLimit {
-		return nil, errors.New("too many connection attempts")
-	}
-
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-
-	for ; ; <-ticker.C {
-		select {
-		case <-c.mainCtx.Done():
-			return nil, errors.New("main context canceled")
-		default:
-			currentState := c.isConnected()
-			c.callRetrievers()
-			headers := http.Header{}
-			for kk, vv := range c.wsHeaders.All() {
-				headers.Add(string(kk), string(vv))
-			}
-			conn, response, err := c.dialer.DialContext(c.ctx, c.wsURL.String(), headers)
-			if err != nil {
-				c.callErrorCallbacks(err)
-			}
-			if err != nil && response != nil {
-				_ = response.Body.Close()
-			}
-			c.mut.Lock()
-			c.conn = conn
-			c.connected = err == nil
-			if response != nil && response.StatusCode >= 400 {
-				c.connected = false
-				err = errors.New(response.Status)
-				c.callErrorCallbacks(err)
-			}
-			c.mut.Unlock()
-
-			if err == nil {
-				if c.mode == Subscription && (reconnect || (!currentState && c.getSubscribed())) {
-					_ = c.unsubscribe(false)
-					_ = c.subscribe(true, nil, nil)
-				}
-			} else {
-				c.lgr.Error(err)
-				continue
-			}
-
-			return c.getConn(), nil
-		}
-	}
-}
-
-// readMessage ...
-// Reference: https://github.com/recws-org/recws/blob/master/recws.go
-func (c *client) readMessage() <-chan Received {
-	go func() {
-		mt, rm, err := c.getConn().ReadMessage()
-		if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
-			_ = c.Stop()
-			c.receivedCh <- Received{
-				MessageType:    mt,
-				ReadingMessage: rm,
-				Err:            err,
-			}
-			return
-		}
-		if err != nil {
-			c.lgr.Error(err)
-			c.closeWS()
-		}
-		c.receivedCh <- Received{
-			MessageType:    mt,
-			ReadingMessage: rm,
-			Err:            err,
-		}
-	}()
-	return c.receivedCh
-}
-
-func (c *client) write(sm sendMsg) (err error) {
-	_, ok := c.mainCtx.Deadline()
-	if ok {
-		return errors.New("deadline exceeded")
-	}
-
-	ctx, cancel := context.WithTimeout(c.mainCtx, time.Millisecond*15)
-	writing := false
-	for writing {
-		select {
-		case c.sendBuf <- sm:
-			err = nil
-			writing = false
-		case <-ctx.Done():
-			err = errors.New("context deadline exceeded")
-			c.lgr.Error(err)
-			writing = false
-		}
-	}
-	cancel()
-	return err
-}
-
-func (c *client) listenWrite() {
-	for buf := range c.sendBuf {
-		if !c.isConnected() {
-			c.sendBuf <- buf
-			continue
-		}
-		conn := c.getConn()
-		if conn == nil {
-			c.sendBuf <- buf
-			continue
-		}
-		var err error
-
-		switch buf.typ {
-		case ping:
-			c.mut.Lock()
-			err = conn.WriteControl(buf.messageTyp, buf.msg, time.Now().Add(pingPeriod/2))
-			c.mut.Unlock()
-			if err != nil {
-				c.lgr.Error(err)
-			}
-			break
-		case message, mclose:
-			c.mut.Lock()
-			err = conn.WriteMessage(buf.messageTyp, buf.msg)
-			c.mut.Unlock()
-			if err != nil {
-				c.lgr.Error(err)
-			}
-			break
-		default:
-			err = nil
-		}
-		if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
-			_ = c.Stop()
-			return
-		}
-		if err != nil {
-			log.Println(fmt.Errorf("write message error %v", err))
-			c.closeWS()
-		}
-	}
-}
-
-func (c *client) listen() {
-	listening := true
-	for listening {
-		if !c.isConnected() {
-			time.Sleep(time.Second * 1)
-			continue
-		}
-		select {
-		case <-c.listenCtx.Done():
-			listening = false
-			break
-		case received := <-c.readMessage():
-			if received.Err != nil {
-				c.lgr.Error(received.Err)
-			}
-
-			if websocket.IsCloseError(received.Err, websocket.CloseNormalClosure) {
-				listening = false
-				return
-			}
-			if received.Err != nil {
-				c.closeWS()
-				continue
-			}
-
-			if c.listenCallbacks != nil {
-				switch received.MessageType {
-				case websocket.TextMessage:
-					if !json.Valid(received.ReadingMessage) {
-						continue
-					}
-
-					c.parseIncoming(received.ReadingMessage)
-				}
-			}
-		}
-	}
-}
-
-func (c *client) ping() {
-	writing := true
-	for writing {
-		select {
-		case <-c.pingTicker.C:
-			if !c.isConnected() {
-				ls := c.subscribed && c.mode == Subscription
-				_, err := c.connect(false)
-				if err != nil {
-					c.lgr.Error(err)
-					c.callErrorCallbacks(err)
-					continue
-				}
-
-				if ls {
-					addrs := make([]string, len(c.subscribedAddresses))
-					i := 0
-					for k, _ := range c.subscribedAddresses {
-						addrs[i] = k
-						i++
-					}
-					if err = c.Subscribe(addrs, c.subscribedSignedData, c.subscribedTypes...); err != nil {
-						c.lgr.Error(err)
-						c.callErrorCallbacks(err)
-					}
-				}
-			} else {
-				if err := c.write(sendMsg{
-					typ:        ping,
-					messageTyp: websocket.PingMessage,
-					msg:        []byte{},
-				}); err != nil {
-					c.lgr.Error(err)
-
-					if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
-						_ = c.Stop()
-						writing = false
-						break
-					}
-					if err != nil {
-						c.closeWS()
-						continue
-					}
-				}
-
-			}
-		case <-c.mainCtx.Done():
-			c.pingTicker.Stop()
-			return
-		}
-	}
-	c.pingTicker.Stop()
-}
-
-func (c *client) closeWS() {
-	if conn := c.getConn(); conn != nil {
-		if err := c.write(sendMsg{
-			typ:        mclose,
-			messageTyp: websocket.CloseMessage,
-			msg:        websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
-		}); err != nil {
-			c.lgr.Error(err)
-		}
-		if err := conn.Close(); err != nil {
-			c.lgr.Error(err)
-		}
-	}
-	c.connected = false
-	c.conn = nil
-}
-
-func (c *client) subscribe(already bool, addresses []string, signedDatas map[string]string, txTypes ...Type) error {
-	if len(txTypes) > len(TypesSlice) {
-		return errors.New("invalid tx types")
-	}
-
-	tAddresses := make([]string, 0)
-	tSignedData := make(map[string]string)
-	subscribedAddress := c.getSubscribedAddress()
-	subscribedSignedData := c.getSubscribedSignedDatas()
-	if already {
-		if len(subscribedAddress) <= 0 {
-			return nil
-		}
-		for address := range subscribedAddress {
-			tAddresses = append(tAddresses, address)
-		}
-
-		if len(subscribedSignedData) == 0 {
-			return nil
-		}
-
-		for kk, vv := range subscribedSignedData {
-			tSignedData[kk] = vv
-		}
-	} else {
-		if len(addresses) == 0 {
-			return errors.New("addresses count is zero")
-		}
-
-		tAddresses = addresses
-
-		if len(subscribedAddress) > 0 {
-			newAddress := make([]string, 0)
-			for i := 0; i < len(addresses); i++ {
-				if _, ok := subscribedAddress[addresses[i]]; !ok {
-					newAddress = append(newAddress, addresses[i])
-				}
-			}
-
-			tAddresses = newAddress
-		}
-
-		tSignedData = signedDatas
-	}
-
-	if len(tAddresses) == 0 || len(tSignedData) == 0 {
-		return nil
-	}
-
-	subscribeMessage := Message{
-		IsWeb:       false,
-		Type:        Subscribe,
-		Addrs:       tAddresses,
-		SignedAddrs: tSignedData,
-		TXTypes:     txTypes,
-	}
-
-	b, err := json.Marshal(subscribeMessage)
-	if err != nil {
-		c.lgr.Error(err)
-		return err
-	}
-
-	go func() {
-		c.sendBuf <- sendMsg{
-			typ:        message,
-			messageTyp: websocket.TextMessage,
-			msg:        b,
-		}
-	}()
-
-	tmp := make(map[string]bool)
-	for i := 0; i < len(tAddresses); i++ {
-		tmp[tAddresses[i]] = true
-	}
-	c.setSubscribedAddress(tmp)
-	c.setSubscribedSignedDatas(tSignedData)
-	c.setSubscribedTypes(txTypes...)
-
-	return nil
-}
-func (c *client) unsubscribe(_ bool) error {
-	if !c.getSubscribed() {
-		return errors.New("client has not yet subscribed")
-	}
-
-	subscribedAddress := c.getSubscribedAddress()
-	if len(subscribedAddress) <= 0 {
-		return nil
-	}
-
-	addresses := make([]string, 0)
-
-	for address := range subscribedAddress {
-		addresses = append(addresses, address)
-	}
-
-	unsubscribeMessage := Message{
-		Type:  Unsubscribe,
-		Addrs: addresses,
-	}
-
-	b, err := json.Marshal(unsubscribeMessage)
-	if err != nil {
-		c.lgr.Error(err)
-		return err
-	}
-
-	c.sendBuf <- sendMsg{
-		typ:        message,
-		messageTyp: websocket.TextMessage,
-		msg:        b,
-	}
-
-	c.setSubscribed(false)
-
-	return nil
-}
-
-func (c *client) parseIncoming(msg []byte) {
-	var transaction Transaction
-	if err := json.Unmarshal(msg, &transaction); err != nil || (transaction.ID == nil || (transaction.ID != nil && transaction.ID.(string) == "")) {
-		var incomingMsg IncomingMessage
-		if err := json.Unmarshal(msg, &incomingMsg); err != nil {
-			c.lgr.Error(err)
-			return
-		}
-
-		switch incomingMsg.Type {
-		case float64(0):
-			var block Block
-			bb, _ := json.Marshal(incomingMsg.Data)
-			if err := json.Unmarshal(bb, &block); err != nil {
-				c.lgr.Error(err)
-				return
-			}
-			c.callListenCallbacks(&block, nil)
-			break
-		case float64(1):
-			bb, _ := json.Marshal(incomingMsg.Data)
-			if err := json.Unmarshal(bb, &transaction); err != nil {
-				c.lgr.Error(err)
-				return
-			}
-			c.callListenCallbacks(nil, &transaction)
-			break
-		case float64(2):
-			if incomingMsg.State != nil && *incomingMsg.State == OK {
-				c.setSubscribed(true)
-			}
-			break
-		default:
-			//
-		}
-
-		return
-	}
-
-	c.callListenCallbacks(nil, &transaction)
-}
-
-func (c *client) callListenCallbacks(bl *Block, trn *Transaction) {
-	if len(c.listenCallbacks) == 0 {
-		return
-	}
-
-	for i := 0; i < len(c.listenCallbacks); i++ {
-		go c.listenCallbacks[i](bl, trn)
-	}
-}
-
-func (c *client) callRetrievers() {
-	for i := 0; i < len(c.retrieveCallbacks); i++ {
-		go c.retrieveCallbacks[i]()
-	}
-
-	time.Sleep(100 * time.Millisecond)
-}
-
-func (c *client) callErrorCallbacks(err error) {
-	if len(c.errorCallbacks) == 0 {
-		return
-	}
-
-	for i := 0; i < len(c.errorCallbacks); i++ {
-		go c.errorCallbacks[i](err)
-	}
 }
