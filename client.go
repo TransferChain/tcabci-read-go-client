@@ -215,7 +215,7 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 	c := &client{
 		ctx:                  ctx,
 		callbackSlots:        make(chan struct{}, 16),
-		version:              "1.6.36",
+		version:              "1.6.37",
 		lgr:                  NewLogger(ctx),
 		mode:                 Subscription,
 		address:              address,
