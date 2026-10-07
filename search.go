@@ -134,6 +134,8 @@ func (s *Search) IsValid() bool {
 }
 
 func (s *Search) ToJSON() ([]byte, error) {
+	copy := *s
+	s = &copy
 	s.PHeight = fmt.Sprintf("%s %d", s.HeightOperator, s.Height)
 
 	buf := bytes.NewBuffer([]byte{})

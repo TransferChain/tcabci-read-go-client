@@ -41,6 +41,22 @@ func (e *Error) Status() int {
 	return e.status
 }
 
+// Response returns an independent status-only response. Headers and body are
+// omitted to avoid retaining credentials or pooled data.
 func (e *Error) Response() *fasthttp.Response {
-	return e.response
+	return responseSnapshot(e.response)
+}
+
+func (e *Error) Unwrap() error {
+	return e.origin
+}
+
+// responseSnapshot retains status only; pooled payloads and credentials are omitted.
+func responseSnapshot(resp *fasthttp.Response) *fasthttp.Response {
+	if resp == nil {
+		return nil
+	}
+	snapshot := &fasthttp.Response{}
+	snapshot.SetStatusCode(resp.StatusCode())
+	return snapshot
 }
