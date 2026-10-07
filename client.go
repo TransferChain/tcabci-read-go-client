@@ -387,7 +387,7 @@ func (c *client) logError(err error) {
 	lgr := c.lgr
 	c.mut.RUnlock()
 	if lgr != nil {
-		lgr.Error("read node request failed")
+		lgr.Error(err)
 	}
 }
 
