@@ -37,12 +37,14 @@ const (
 
 // Message ..
 type Message struct {
-	IsWeb       bool              `json:"is_web"`
-	Type        MessageType       `json:"type"`
-	Addrs       []string          `json:"addrs"`
-	SignedAddrs map[string]string `json:"signed_addrs"`
-	TXTypes     []Type            `json:"tx_types"`
-	Data        []byte            `json:"data,omitempty"`
+	// ClientInstanceID optionally identifies one client across reconnects.
+	ClientInstanceID string            `json:"client_instance_id,omitempty"`
+	IsWeb            bool              `json:"is_web"`
+	Type             MessageType       `json:"type"`
+	Addrs            []string          `json:"addrs"`
+	SignedAddrs      map[string]string `json:"signed_addrs"`
+	TXTypes          []Type            `json:"tx_types"`
+	Data             []byte            `json:"data,omitempty"`
 }
 
 type IncomingMessage struct {

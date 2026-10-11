@@ -90,6 +90,7 @@ type Client interface {
 }
 
 type client struct {
+	clientInstanceID     string
 	authorityAddress     string
 	authoritySigner      WSAuthoritySigner
 	ctx                  context.Context
@@ -215,10 +216,15 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 		}
 	}
 
+	instanceID, err := createClientInstanceID()
+	if err != nil {
+		return nil, err
+	}
 	c := &client{
+		clientInstanceID:     instanceID,
 		ctx:                  ctx,
 		callbackSlots:        make(chan struct{}, 16),
-		version:              "1.6.39",
+		version:              "1.6.40",
 		lgr:                  NewLogger(ctx),
 		mode:                 Subscription,
 		address:              address,
