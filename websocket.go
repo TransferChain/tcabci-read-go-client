@@ -385,6 +385,7 @@ func (c *client) syncSubscription(conn *websocket.Conn, previous []string, wasLi
 	listening := c.mode == Listen
 	msg := Message{Type: Subscribe, SignedAddrs: make(map[string]string), TXTypes: append([]Type(nil), c.subscribedTypes...)}
 	if c.mode == Subscription {
+		msg.ClientInstanceID = c.clientInstanceID
 		for address := range c.subscribedAddresses {
 			msg.Addrs = append(msg.Addrs, address)
 			msg.SignedAddrs[address] = c.subscribedSignedData[address]
@@ -392,6 +393,7 @@ func (c *client) syncSubscription(conn *websocket.Conn, previous []string, wasLi
 	}
 	if listening {
 		msg.Type = ListenMessage
+		msg.ClientInstanceID = c.clientInstanceID
 	}
 	c.mut.RUnlock()
 	sort.Strings(msg.Addrs)
