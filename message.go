@@ -24,6 +24,8 @@ const (
 	Subscribe MessageType = "subscribe"
 	// Unsubscribe message
 	Unsubscribe MessageType = "unsubscribe"
+	// ListenMessage requests privileged all-event delivery.
+	ListenMessage MessageType = "listen"
 )
 
 type State int
