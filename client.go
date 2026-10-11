@@ -57,6 +57,7 @@ const (
 
 // Client TCABCI Read Node Websocket Client
 type Client interface {
+	WithWSAuthority(address string, sign WSAuthoritySigner) (Client, error)
 	WithMode(mode Mode) Client
 	WithProxy(proxyURL *url.URL) Client
 	WithLogger(l Logger) Client
@@ -89,6 +90,8 @@ type Client interface {
 }
 
 type client struct {
+	authorityAddress     string
+	authoritySigner      WSAuthoritySigner
 	ctx                  context.Context
 	lgr                  Logger
 	mode                 Mode
@@ -215,7 +218,7 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 	c := &client{
 		ctx:                  ctx,
 		callbackSlots:        make(chan struct{}, 16),
-		version:              "1.6.37",
+		version:              "1.6.38",
 		lgr:                  NewLogger(ctx),
 		mode:                 Subscription,
 		address:              address,
@@ -387,7 +390,7 @@ func (c *client) logError(err error) {
 	lgr := c.lgr
 	c.mut.RUnlock()
 	if lgr != nil {
-		lgr.Error(err)
+		lgr.Error("read node request failed")
 	}
 }
 

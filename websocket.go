@@ -226,8 +226,22 @@ func (c *client) runSession(s *wsSession) {
 			headers.Add(string(k), string(v))
 		}
 		endpoint := c.wsURL.String()
+		authorityAddress, authoritySigner := c.authorityAddress, c.authoritySigner
 		c.mut.RUnlock()
-		conn, resp, err := dialConnection(s.ctx, &dialer, endpoint, headers)
+		var conn *websocket.Conn
+		var resp *http.Response
+		var err error
+		if authoritySigner != nil {
+			var authority string
+			authority, err = CreateWSAuthorityV3(s.ctx, authorityAddress, authoritySigner)
+			if err == nil {
+				headers.Set("X-Authority", authority)
+			}
+		}
+		if err == nil {
+			conn, resp, err = dialConnection(s.ctx, &dialer, endpoint, headers)
+		}
+		headers.Del("X-Authority")
 		if err != nil && resp != nil && resp.Body != nil {
 			_ = resp.Body.Close()
 		}
@@ -235,7 +249,7 @@ func (c *client) runSession(s *wsSession) {
 			delay = 100 * time.Millisecond
 			err = c.serveConnection(s, conn)
 		}
-		if s.ctx.Err() != nil || websocket.IsCloseError(err, websocket.CloseNormalClosure) {
+		if s.ctx.Err() != nil || websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.ClosePolicyViolation) {
 			return
 		}
 		if err != nil {
@@ -311,6 +325,7 @@ func (c *client) serveConnection(s *wsSession, conn *websocket.Conn) error {
 			if typ == websocket.TextMessage {
 				c.parseIncoming(msg)
 			}
+			clear(msg)
 		}
 	}()
 	// Join the reader before reconnecting or completing Stop.
@@ -318,6 +333,7 @@ func (c *client) serveConnection(s *wsSession, conn *websocket.Conn) error {
 	ticker := time.NewTicker(pingPeriod)
 	defer ticker.Stop()
 	var previous []string
+	wasListening := false
 	var revision uint64
 	first := true
 	for {
@@ -326,7 +342,7 @@ func (c *client) serveConnection(s *wsSession, conn *websocket.Conn) error {
 		c.mut.RUnlock()
 		if first || revision != current {
 			var err error
-			previous, revision, err = c.syncSubscription(conn, previous)
+			previous, wasListening, revision, err = c.syncSubscription(conn, previous, wasListening)
 			if err != nil {
 				return err
 			}
@@ -362,15 +378,19 @@ func writeFrame(conn *websocket.Conn, typ int, b []byte) error {
 	return conn.WriteMessage(typ, b)
 }
 
-func (c *client) syncSubscription(conn *websocket.Conn, previous []string) ([]string, uint64, error) {
+func (c *client) syncSubscription(conn *websocket.Conn, previous []string, wasListening bool) ([]string, bool, uint64, error) {
 	c.mut.RLock()
 	revision := c.subscriptionRevision
+	listening := c.mode == Listen
 	msg := Message{Type: Subscribe, SignedAddrs: make(map[string]string), TXTypes: append([]Type(nil), c.subscribedTypes...)}
 	if c.mode == Subscription {
 		for address := range c.subscribedAddresses {
 			msg.Addrs = append(msg.Addrs, address)
 			msg.SignedAddrs[address] = c.subscribedSignedData[address]
 		}
+	}
+	if listening {
+		msg.Type = ListenMessage
 	}
 	c.mut.RUnlock()
 	sort.Strings(msg.Addrs)
@@ -380,29 +400,29 @@ func (c *client) syncSubscription(conn *websocket.Conn, previous []string) ([]st
 			removed = append(removed, address)
 		}
 	}
-	if len(removed) > 0 {
+	if len(removed) > 0 || (wasListening && !listening) {
 		b, err := json.Marshal(Message{Type: Unsubscribe, Addrs: removed})
 		if err != nil {
-			return nil, revision, err
+			return nil, wasListening, revision, err
 		}
 		err = writeFrame(conn, websocket.TextMessage, b)
 		clear(b)
 		if err != nil {
-			return nil, revision, err
+			return nil, wasListening, revision, err
 		}
 	}
-	if len(msg.Addrs) > 0 {
+	if len(msg.Addrs) > 0 || listening {
 		b, err := json.Marshal(msg)
 		if err != nil {
-			return nil, revision, err
+			return nil, wasListening, revision, err
 		}
 		err = writeFrame(conn, websocket.TextMessage, b)
 		clear(b)
 		if err != nil {
-			return nil, revision, err
+			return nil, wasListening, revision, err
 		}
 	}
-	return msg.Addrs, revision, nil
+	return msg.Addrs, listening, revision, nil
 }
 
 func decodeTransaction(raw []byte) (*Transaction, error) {
@@ -457,6 +477,16 @@ func (c *client) parseIncoming(raw []byte) {
 			return
 		}
 		c.callListenCallbacks(nil, tx)
+	case 3:
+		if envelope.State == nil || *envelope.State != OK {
+			c.mut.RLock()
+			session := c.session
+			c.mut.RUnlock()
+			c.callErrorCallbacks(errors.New("listen rejected"))
+			if session != nil {
+				session.cancel()
+			}
+		}
 	case 2:
 		if envelope.State != nil && *envelope.State == Fail {
 			c.callErrorCallbacks(errors.New("subscription rejected"))
