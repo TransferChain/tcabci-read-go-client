@@ -319,6 +319,7 @@ func (c *client) serveConnection(s *wsSession, conn *websocket.Conn) error {
 				}
 			}
 			if err != nil {
+				clear(msg)
 				readDone <- err
 				return
 			}
