@@ -67,6 +67,7 @@ const (
 	TypeMultiDataRoom         Type = "multi_data_room"
 	TypeMultiCollection       Type = "multi_collection"
 	TypeMultiDataV2           Type = "multi_dataV2"
+	TypeMultiPasswd           Type = "multi_passwd"
 	TypePasswdData            Type = "passwd_data"
 	TypePasswdRoom            Type = "passwd_room"
 	TypePasswdRoomPolicy      Type = "passwd_room_policy"
@@ -78,6 +79,7 @@ const (
 	TypeDataV2Policy          Type = "datav2_policy"
 	TypeCollection            Type = "coll"
 	TypeCollectionPolicy      Type = "coll_policy"
+	TypeCollectionF           Type = "collF"
 	TypeDataV2Collection      Type = "datav2_coll"
 	TypeDataV2F               Type = "datav2F"
 )
@@ -155,6 +157,9 @@ var TypesSlice = []Type{
 	TypeCollectionPolicy,
 	TypeDataV2Collection,
 	TypeDataV2F,
+	// Shared with the JS read client, the SDKs and the read-node tx_type enum.
+	TypeMultiPasswd,
+	TypeCollectionF,
 }
 
 // Transaction read node transaction model
