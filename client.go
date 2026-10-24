@@ -206,12 +206,10 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 			RootCAs:            pool,
 			MinVersion:         tls.VersionTLS12,
 			InsecureSkipVerify: insecure, // #nosec G402 -- Explicit caller opt-out; optional pinning remains independent.
+			// VerifyConnection also runs on resumed sessions. The whole peer
+			// chain is passed so a pin may name the leaf or a signing CA.
 			VerifyConnection: func(state tls.ConnectionState) error {
-				var raw [][]byte
-				if len(state.PeerCertificates) > 0 {
-					raw = [][]byte{state.PeerCertificates[0].Raw}
-				}
-				return verifyPeer(raw, state.VerifiedChains, customFingerprint)
+				return verifyPeer(state.PeerCertificates, customFingerprint)
 			},
 		}
 	}
@@ -224,7 +222,7 @@ func newClient(ctx context.Context, address string, wsAddress string, chainName,
 		clientInstanceID:     instanceID,
 		ctx:                  ctx,
 		callbackSlots:        make(chan struct{}, 16),
-		version:              "1.6.40",
+		version:              "1.6.42",
 		lgr:                  NewLogger(ctx),
 		mode:                 Subscription,
 		address:              address,
